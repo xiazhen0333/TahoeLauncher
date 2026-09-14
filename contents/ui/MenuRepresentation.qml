@@ -36,9 +36,16 @@ PlasmaCore.Dialog {
 	objectName: "popupWindow"
 	flags: Qt.WindowStaysOnTopHint
 
-	// The background (theme SVG over a self-blurred wallpaper) is drawn in QML
-	// instead of natively, so the whole visual can take part in the animations.
-	backgroundHints: PlasmaCore.Types.NoBackground
+	// The panel background (theme SVG) is drawn in QML instead of natively, so
+	// the whole visual can take part in the animations.
+	//
+	// StandardBackground is what makes PlasmaQuick ask KWin for the real
+	// backdrop blur (KWindowEffects::enableBlurBehind plus background contrast,
+	// clipped to the theme background's shape); NoBackground switches that off
+	// again. A compositor-side blur region cannot follow the open/close
+	// animation, so it is only requested while the panel sits still.
+	property bool blurEnabled: false
+	backgroundHints: blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground
 
 	// Transparent window surface, so the theme SVG's rounded corners show
 	// instead of the default opaque white window background.
@@ -53,16 +60,6 @@ PlasmaCore.Dialog {
 	// animated during open/close. The id inside layer.effect's implicit
 	// Component is not visible from outside, so this property relays it.
 	property real contentBlurRadius: 0
-
-	// Wallpaper behind the panel: restores the frosted-glass look the native
-	// dialog background used to get from the KWin blur effect.
-	property string wallpaperPath: ""
-	readonly property string wallpaperUrl: {
-		if (wallpaperPath.length === 0) return "";
-		var p = wallpaperPath;
-		if (p.charAt(0) === "/") p = "file://" + p;
-		return encodeURI(p);
-	}
 
 	property int iconSize: {
 		switch(Plasmoid.configuration.appsIconSize){
@@ -93,7 +90,6 @@ PlasmaCore.Dialog {
 			closeAnim.stop();
 			openAnim.stop();
 			resetCloseState();
-			refreshWallpaper();
 			var pos = popupPosition(width, height);
 			x = pos.x;
 			y = pos.y;
@@ -102,6 +98,7 @@ PlasmaCore.Dialog {
 			panel.scale = 0.94;
 			panel.opacity = 0;
 			contentBlurRadius = 16;
+			blurEnabled = false;
 			openAnim.start();
 		}
 	}
@@ -148,6 +145,10 @@ PlasmaCore.Dialog {
 		}
 		openAnim.stop();
 		closing = true;
+		// Drop the KWin blur before the panel starts moving: the blur region is
+		// fixed to the window, it would lag behind the shrinking panel and only
+		// vanish with the window at the very end.
+		blurEnabled = false;
 		closeAnim.start();
 	}
 
@@ -158,23 +159,17 @@ PlasmaCore.Dialog {
 		contentBlurRadius = 0;
 	}
 
-	function refreshWallpaper() {
-		var path = "";
-		try {
-			var cor = Plasmoid.containment ? Plasmoid.containment.corona : null;
-			if (cor) {
-				for (var s = 0; s < Math.max(1, cor.numScreens); s++) {
-					var w = cor.wallpaper(s);
-					if (w && w.Image && w.Image.length > 0) {
-						path = w.Image;
-						break;
-					}
-				}
+	// PlasmaQuick paints the theme background itself for StandardBackground and
+	// derives the KWin blur region from it. We borrow that region but draw the
+	// background inside `panel` instead, so it can be animated - hide the native
+	// copy so it does not show through as a second, static frame.
+	function hideNativeBackground() {
+		var kids = contentItem ? contentItem.children : [];
+		for (var i = 0; i < kids.length; ++i) {
+			if (kids[i] && kids[i] !== fs) {
+				kids[i].visible = false;
 			}
-		} catch (e) {
-			path = "";
 		}
-		wallpaperPath = path;
 	}
 
 	function reset() {
@@ -254,7 +249,7 @@ PlasmaCore.Dialog {
 		// We want the MainView to have an uniform margin through different plasma themes
 		property real innerPadding: 15
 
-		// Whole panel (wallpaper, theme background, content). Animated as one unit.
+		// Whole panel (theme background, content). Animated as one unit.
 		Item {
 			id: panel
 			anchors.fill: parent
@@ -265,55 +260,8 @@ PlasmaCore.Dialog {
 				radius: root.contentBlurRadius
 			}
 
-			// Blurred wallpaper: the "frost" of the glass panel. Masked with the
-			// theme background's alpha so the rounded corners stay transparent
-			// instead of showing sharp wallpaper edges.
-			Item {
-				id: wallpaperLayer
-				anchors.fill: parent
-				layer.enabled: true
-				layer.effect: OpacityMask {
-					maskSource: ShaderEffectSource {
-						sourceItem: dialogBackground
-						sourceRect: Qt.rect(0, 0, dialogBackground.width, dialogBackground.height)
-					}
-				}
-
-				Image {
-					id: wallpaperImage
-					visible: false
-					cache: true
-					asynchronous: true
-					smooth: true
-					fillMode: Image.PreserveAspectCrop
-					x: kicker.screenGeometry.x - root.x
-					y: kicker.screenGeometry.y - root.y
-					width: kicker.screenGeometry.width
-					height: kicker.screenGeometry.height
-					source: root.wallpaperUrl
-				}
-
-				ShaderEffectSource {
-					id: wallpaperSource
-					anchors.fill: parent
-					sourceItem: wallpaperImage
-					sourceRect: Qt.rect(root.x - kicker.screenGeometry.x,
-										root.y - kicker.screenGeometry.y,
-										width, height)
-					smooth: true
-					visible: wallpaperImage.status === Image.Ready
-				}
-
-				FastBlur {
-					id: wallpaperBlur
-					anchors.fill: parent
-					source: wallpaperSource
-					radius: 48
-					visible: wallpaperSource.visible
-				}
-			}
-
-			// Same theme background the dialog used to paint natively.
+			// Theme background. KWin blurs whatever is behind the window, so this
+			// only has to provide the glass surface itself.
 			KSvg.FrameSvgItem {
 				id: dialogBackground
 				anchors.fill: parent
@@ -354,6 +302,7 @@ PlasmaCore.Dialog {
 				NumberAnimation { target: panel; property: "opacity"; from: 0; to: 1; duration: 250; easing.type: Easing.OutCubic }
 				NumberAnimation { target: root; property: "contentBlurRadius"; from: 16; to: 0; duration: 250; easing.type: Easing.OutCubic }
 			}
+			ScriptAction { script: root.blurEnabled = true; }
 		}
 	}
 
@@ -364,9 +313,6 @@ PlasmaCore.Dialog {
 	Component.onCompleted: {
 		kicker.reset.connect(reset);
 		rootModel.refresh();
-		refreshWallpaper();
-		try {
-			Plasmoid.containment.corona.wallpaperChanged.connect(refreshWallpaper);
-		} catch (e) { /* wallpaper tracking is optional */ }
+		hideNativeBackground();
 	}
 }

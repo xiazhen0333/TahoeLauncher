@@ -13,10 +13,14 @@
 - **打开动画**：面板从轻微模糊、缩小 (0.94)、透明状态放大聚焦到正常状态（250ms，OutCubic）。
 - **关闭动画**：所有关闭路径统一走「模糊 + 缩小 (0.9) + 淡出」（300ms，OutCubic），包括：
   点击应用启动、按 Escape、点击 dock/面板按钮、点击桌面空白处或切换到其他窗口。
-- **自绘磨砂背景**：`PlasmaCore.Dialog` 使用 `NoBackground` 后由 QML 自绘背景——
-  运行时通过 `corona.wallpaper()` 取当前壁纸 → `ShaderEffectSource` 裁剪面板区域 →
-  `FastBlur` 模糊 → 叠加主题 `dialogs/background`，还原原生 KWin blur 的磨砂玻璃观感。
-- **圆角保留**：壁纸模糊层用主题背景的 alpha 作为 `OpacityMask` 蒙版裁剪，主题 SVG 的圆角不会被壁纸填成直角。
+- **真实 KWin 背景模糊**：面板使用 `PlasmaCore.Types.StandardBackground`，由 PlasmaQuick 向
+  KWin 请求真正的背景模糊（`KWindowEffects::enableBlurBehind`，模糊区域按主题背景 SVG 裁形），
+  背后是壁纸还是其他窗口都能正确模糊。
+  合成器的模糊区域固定在窗口上、无法跟随缩放与淡出，因此只在动画结束后开启：
+  打开动画结束时置 `blurEnabled = true`，关闭动画开始时立刻置回 `false`。
+- **自绘背景 + 隐藏原生背景**：主题 `dialogs/background` 仍由 `panel` 内的 `KSvg.FrameSvgItem`
+  自绘（这样它才参与缩放/淡出动画），PlasmaQuick 自己绘制的那份在 `Component.onCompleted`
+  中隐藏，避免叠成两层静态边框。模糊区域来自 SVG 裁形而非该项是否可见，隐藏它不影响模糊。
 
 ### 主要修改文件
 
