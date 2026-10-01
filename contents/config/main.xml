@@ -6,6 +6,10 @@
   <kcfgfile name=""/>
 
   <group name="General">
+    <entry name="animationBackend" type="Int">
+      <label>0: Automatically use the installed KWin effect, 1: built-in animation, 2: no animation.</label>
+      <default>0</default>
+    </entry>
     <entry name="icon" type="String">
       <label>The name of the icon to use for the compact representation (e.g. on a small panel).</label>
       <default>start-here-kde-symbolic</default>

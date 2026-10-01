@@ -62,7 +62,7 @@ Item {
     }
 
     Component.onCompleted: {
-        dashWindow = Qt.createQmlObject("MenuRepresentation {}", root);
+        dashWindow = menuRepresentation.createObject(root);
         plasmoid.activated.connect(function() {
             dashWindow.toggleFromButton();
         });

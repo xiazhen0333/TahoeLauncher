@@ -1,0 +1,35 @@
+name: Validate Tahoe Launcher
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Qt test runtime
+        run: python -m pip install PySide6==6.7.3
+      - name: Validate effect and row model
+        run: node tests/motion-effect.test.js
+      - name: Verify Qt Quick animation and virtualization
+        run: python tests/qt-smoke.py
+      - name: Verify installation
+        run: python tests/install-smoke.py
+      - name: Parse all QML and validate package metadata
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess, xml.etree.ElementTree as ET
+          import PySide6
+          formatter = pathlib.Path(PySide6.__file__).parent / 'qmlformat'
+          for path in pathlib.Path('contents').rglob('*.qml'):
+              subprocess.run([str(formatter), str(path)], stdout=subprocess.DEVNULL, check=True)
+          for path in ('metadata.json', 'kwin/tahoelauncher-motion/metadata.json'):
+              json.loads(pathlib.Path(path).read_text())
+          ET.parse('contents/config/main.xml')
+          PY
+          sh -n scripts/install.sh
+          git diff --check

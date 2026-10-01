@@ -44,6 +44,7 @@ KCM.SimpleKCM {
     property bool cfg_useCustomButtonImage: Plasmoid.configuration.useCustomButtonImage
     property string cfg_customButtonImage: Plasmoid.configuration.customButtonImage
 
+    property alias cfg_animationBackend: animationBackend.currentIndex
     property alias cfg_floating: floating.checked
     property alias cfg_launcherPosition: launcherPosition.currentIndex
     property alias cfg_offsetX: screenOffset.value
@@ -212,6 +213,12 @@ KCM.SimpleKCM {
       PlasmaComponents.ToolTip {
           text: panelOffset.value
       }
+    }
+
+    ComboBox {
+      id: animationBackend
+      Kirigami.FormData.label: i18n("Animation:")
+      model: [i18n("Automatic (KWin when available)"), i18n("Built-in"), i18n("Off")]
     }
 
     Kirigami.Separator {

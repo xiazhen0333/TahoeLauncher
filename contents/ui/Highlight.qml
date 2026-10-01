@@ -1,7 +1,6 @@
 import QtQuick
 import org.kde.ksvg as KSvg
 import org.kde.kirigami as Kirigami
-import Qt5Compat.GraphicalEffects
 
 Rectangle {
     id: highlight
@@ -46,17 +45,6 @@ Rectangle {
     z: -20
     color: main.contrastBgColor//"transparent"
     clip: true
-
-    // apply rounded corners mask
-    layer.enabled: true
-    layer.effect: OpacityMask {
-        maskSource: Rectangle {
-            x: highlight.x; y: highlight.y
-            width: highlight.width
-            height: highlight.height
-            radius: highlight.radius
-        }
-    }
 
     KSvg.FrameSvgItem {
         id: background
