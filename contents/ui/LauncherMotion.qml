@@ -1,73 +1,119 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import QtQuick
 
-// Retargetable fallback. Behaviors retain the current value on interruption.
+// A critically damped spring preserves position and velocity on retargeting.
 Item {
     id: motion
     property bool requestedOpen: false
     property bool closeRequested: false
     property bool animationsEnabled: true
     property real durationFactor: 1
-    property real openingScale: 0.94
-    property real closingScale: 0.96
+    property real openingScale: 0.91
+    property real closingScale: 0.91
     property real surfaceScale: openingScale
     property real surfaceOpacity: 0
+    property real contentOpacity: 0
+    property real scaleVelocity: 0
+    property real opacityVelocity: 0
+    property real contentVelocity: 0
+    property real revealDelay: 0
     property real travel: 8
+    property bool running: false
+    property real elapsedFrames: 0
+    property string compositorFrame: "close|0.91000,0.00000"
     readonly property real offsetY: travel * (1 - Math.min(1, Math.max(0, (surfaceScale - openingScale) / (1 - openingScale))))
-    readonly property bool settled: !scaleAnimation.running && !opacityAnimation.running
+    readonly property bool settled: !running
     signal closed
-    onSurfaceOpacityChanged: {
-        if (surfaceOpacity <= 0.001)
-            Qt.callLater(finishClose);
-    }
-    function finishClose() {
-        if (closeRequested && !requestedOpen && surfaceOpacity <= 0.001) {
-            closeRequested = false;
-            closed();
-        }
-    }
 
     function prepare() {
-        scaleAnimation.stop();
-        opacityAnimation.stop();
+        running = false;
         requestedOpen = false;
         closeRequested = false;
-        scaleBehavior.enabled = false;
-        opacityBehavior.enabled = false;
         surfaceScale = openingScale;
         surfaceOpacity = 0;
-        scaleBehavior.enabled = Qt.binding(() => motion.animationsEnabled && motion.durationFactor > 0);
-        opacityBehavior.enabled = Qt.binding(() => motion.animationsEnabled && motion.durationFactor > 0);
+        contentOpacity = 0;
+        scaleVelocity = opacityVelocity = contentVelocity = 0;
+        revealDelay = 0.06 * durationFactor;
+        elapsedFrames = 0;
+        publishFrame();
     }
     function open() {
         requestedOpen = true;
         closeRequested = false;
-        surfaceScale = 1;
-        surfaceOpacity = 1;
+        start();
+        publishFrame();
     }
     function close() {
         requestedOpen = false;
         closeRequested = true;
-        surfaceScale = closingScale;
-        surfaceOpacity = 0;
-        Qt.callLater(finishClose);
+        revealDelay = 0;
+        start();
+        publishFrame();
     }
-    Behavior on surfaceScale {
-        id: scaleBehavior
-        enabled: motion.animationsEnabled && motion.durationFactor > 0
-        NumberAnimation {
-            id: scaleAnimation
-            duration: Math.round((motion.requestedOpen ? 260 : 180) * motion.durationFactor)
-            easing.type: motion.requestedOpen ? Easing.OutCubic : Easing.InCubic
+    function start() {
+        if (!animationsEnabled || durationFactor <= 0) {
+            surfaceScale = requestedOpen ? 1 : closingScale;
+            surfaceOpacity = contentOpacity = requestedOpen ? 1 : 0;
+            scaleVelocity = opacityVelocity = contentVelocity = 0;
+            finish();
+        } else {
+            if (!running)
+                elapsedFrames = 0;
+            running = true;
         }
     }
-    Behavior on surfaceOpacity {
-        id: opacityBehavior
-        enabled: motion.animationsEnabled && motion.durationFactor > 0
-        NumberAnimation {
-            id: opacityAnimation
-            duration: Math.round((motion.requestedOpen ? 130 : 180) * motion.durationFactor)
-            easing.type: motion.requestedOpen ? Easing.OutQuad : Easing.InQuad
+    function publishFrame() {
+        var phase = requestedOpen ? (running ? "open" : "settled") : "close";
+        compositorFrame = phase + "|" + surfaceScale.toFixed(5) + "," + Math.max(0, Math.min(1, surfaceOpacity)).toFixed(5);
+    }
+    function spring(value, velocity, target, frequency, seconds) {
+        var displacement = value - target;
+        var coefficient = velocity + frequency * displacement;
+        var decay = Math.exp(-frequency * seconds);
+        return [(displacement + coefficient * seconds) * decay + target,
+                (velocity - frequency * coefficient * seconds) * decay];
+    }
+    function advance(seconds) {
+        if (!running || seconds <= 0)
+            return;
+        var targetScale = requestedOpen ? 1 : closingScale;
+        var targetOpacity = requestedOpen ? 1 : 0;
+        var scale = spring(surfaceScale, scaleVelocity, targetScale, (requestedOpen ? 22 : 28) / durationFactor, seconds);
+        var opacity = spring(surfaceOpacity, opacityVelocity, targetOpacity, (requestedOpen ? 40 : 35) / durationFactor, seconds);
+        var contentSeconds = Math.max(0, seconds - revealDelay);
+        revealDelay = Math.max(0, revealDelay - seconds);
+        var content = spring(contentOpacity, contentVelocity, targetOpacity, (requestedOpen ? 28 : 40) / durationFactor, contentSeconds);
+        surfaceScale = scale[0];
+        scaleVelocity = scale[1];
+        surfaceOpacity = opacity[0];
+        opacityVelocity = opacity[1];
+        contentOpacity = content[0];
+        contentVelocity = content[1];
+        if (Math.abs(surfaceScale - targetScale) < 0.0003 && Math.abs(scaleVelocity) < 0.005
+                && Math.abs(surfaceOpacity - targetOpacity) < 0.002 && Math.abs(opacityVelocity) < 0.03
+                && Math.abs(contentOpacity - targetOpacity) < 0.002 && Math.abs(contentVelocity) < 0.03) {
+            surfaceScale = targetScale;
+            surfaceOpacity = contentOpacity = targetOpacity;
+            scaleVelocity = opacityVelocity = contentVelocity = 0;
+            finish();
+        }
+        publishFrame();
+    }
+    function finish() {
+        running = false;
+        if (closeRequested && !requestedOpen) {
+            closeRequested = false;
+            closed();
+        }
+    }
+    FrameAnimation {
+        objectName: "motionFrames"
+        running: motion.running
+        onTriggered: {
+            var elapsed = elapsedTime;
+            // A cold window or a long frame must not skip the initial reveal.
+            motion.advance(Math.min(1 / 30, Math.max(0, elapsed - motion.elapsedFrames)));
+            motion.elapsedFrames = elapsed;
         }
     }
 }

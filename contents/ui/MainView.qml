@@ -17,6 +17,7 @@
  *   51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA .          *
  ****************************************************************************/
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components 3.0 as PlasmaComponents
@@ -78,6 +79,15 @@ Item {
         }
 
         Item {
+            opacity: root.animationContentOpacity
+            // Removing the layer at rest also commits the final compositor frame.
+            layer.enabled: root.visible && root.motionController.running && root.backendForSession !== 2 && GraphicsInfo.api !== GraphicsInfo.Software
+            layer.effect: MultiEffect {
+                blurEnabled: true
+                blurMax: 12
+                blur: 1 - root.animationContentOpacity
+                autoPaddingEnabled: false
+            }
             Layout.fillHeight: true
             Layout.fillWidth: true
             clip: true

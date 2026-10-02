@@ -8,7 +8,7 @@ class Signal {
     connect(fn) { this.handlers.push(fn); }
     emit(...args) { this.handlers.slice().forEach(fn => fn(...args)); }
 }
-function harness() {
+function harness(damageSynchronously = false) {
     const running = new Map(), calls = [], grabs = new Map();
     let next = 0;
     const effect = {
@@ -17,7 +17,7 @@ function harness() {
         ungrab(w, role) { grabs.delete(role); }
     };
     const effects = { windowAdded: new Signal(), windowClosed: new Signal(), windowDeleted: new Signal(), stackingOrder: [], hasActiveFullScreenEffect: false };
-    const context = { effect, effects, Effect: { Scale: 1, Opacity: 2, Translation: 3, WindowAddedGrabRole: 4, WindowClosedGrabRole: 5, WindowForceBlurRole: 6, WindowForceBackgroundContrastRole: 7 }, QEasingCurve: { OutCubic: 1, InCubic: 2 }, animationTime: n => n,
+    const context = { effect, effects, Effect: { Scale: 1, Opacity: 2, Translation: 3, WindowAddedGrabRole: 4, WindowClosedGrabRole: 5, WindowForceBlurRole: 6, WindowForceBackgroundContrastRole: 7 }, QEasingCurve: { Linear: 0, OutCubic: 1, InCubic: 2 }, animationTime: n => n,
         animate(options) {
             calls.push(options);
             return (options.animations || [options]).map(settings => {
@@ -29,14 +29,21 @@ function harness() {
         set(options) {
             const ids = context.animate(options);
             ids.forEach(id => running.get(id).persistent = true);
+            if (damageSynchronously) options.window.windowDamaged.emit(options.window);
             return ids;
         },
-        cancel(id) { running.delete(id); },
+        cancel(id) {
+            const current = running.get(id);
+            running.delete(id);
+            if (damageSynchronously && current) current.window.windowDamaged.emit(current.window);
+        },
+        freezeInTime(id, elapsed) { running.get(id).frozenAt = elapsed; return true; },
         retarget(id, target, duration) {
             const current = running.get(id);
             if (!current) return false;
             calls.push({ retarget: id, target, duration });
             current.to = target;
+            if (damageSynchronously) current.window.windowDamaged.emit(current.window);
             return true;
         }
     };
@@ -56,6 +63,41 @@ function harness() {
         effect.animationEnded.emit(w, 0);
     };
     return { context, effect, effects, running, calls, grabs, window, finish };
+}
+{
+    const h = harness(true), w = h.window('TahoeLauncher Motion v4|0.5,0.5,0|open|0.91,0');
+    h.effects.windowAdded.emit(w);
+    const ids = [...h.running.keys()];
+    assert.equal(ids.length, 3, 'synchronous repaint must not create orphan channels');
+    w.caption = 'TahoeLauncher Motion v4|0.5,0.5,0|open|0.96,0.9'; w.windowDamaged.emit(w);
+    assert.deepEqual([...h.running.keys()], ids, 'retarget repaint must not recreate channels');
+    w.caption = 'TahoeLauncher Motion v4|0.5,0.5,0|settled|1,1'; w.windowDamaged.emit(w);
+    assert.equal(h.running.size, 0, 'all channels must be removed at rest so native blur resumes');
+    assert.equal(h.context.motion.applyingFrames.size, 0);
+}
+{
+    const h = harness(), w = h.window('TahoeLauncher Motion v4|0.25,1,8|open|0.91,0');
+    h.effects.windowAdded.emit(w);
+    const ids = [...h.running.keys()];
+    assert.equal(ids.length, 3);
+    assert.equal([...h.running.values()][0].to, 0.91);
+    assert.ok([...h.running.values()].every(a => a.frozenAt === 1));
+    w.caption = 'TahoeLauncher Motion v4|0.25,1,8|open|0.95,0.8'; w.windowDamaged.emit(w);
+    assert.deepEqual([...h.running.keys()], ids, 'spring frames must reuse the same channels');
+    assert.equal([...h.running.values()][0].to, 0.95);
+    w.caption = 'TahoeLauncher Motion v4|0.25,1,8|close|0.96,0.7'; w.windowDamaged.emit(w);
+    w.caption = 'TahoeLauncher Motion v4|0.25,1,8|open|0.959,0.75'; w.windowDamaged.emit(w);
+    assert.deepEqual([...h.running.keys()], ids, 'rapid reversal must keep the same mapped window channels');
+    w.caption = 'TahoeLauncher Motion v4|0.25,1,8|open|1,1'; w.windowDamaged.emit(w);
+    assert.equal(h.running.size, 0);
+    assert.equal(h.grabs.size, 0);
+    w.caption = 'TahoeLauncher Motion v4|0.25,1,8|settled|1,1'; w.windowDamaged.emit(w);
+    assert.equal(h.running.size, 0, 'settled repaint must not recreate transforms');
+    w.caption = 'TahoeLauncher Motion v4|0.25,1,8|close|0.91,0'; w.windowDamaged.emit(w);
+    w.visible = false; w.windowHiddenChanged.emit(w); h.effects.windowClosed.emit(w);
+    assert.equal(h.running.size, 0);
+    assert.equal(h.context.motion.phases.size, 0);
+    assert.equal(h.context.motion.marker(h.window('TahoeLauncher Motion v4|0.5,0.5,0|open|1.5,0.5')), null);
 }
 {
     const h = harness(), w = h.window('TahoeLauncher Motion v3|0.5,0.5,0|open');

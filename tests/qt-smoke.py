@@ -33,23 +33,44 @@ motion = create(root / 'contents/ui/LauncherMotion.qml')
 closed = QSignalSpy(motion, motion.metaObject().method(motion.metaObject().indexOfSignal('closed()')))
 call(motion, 'prepare'); call(motion, 'open'); QTest.qWait(70)
 before = motion.property('surfaceScale')
-assert 0.94 < before < 1, before
+assert 0.91 < before < 1, before
 call(motion, 'close')
 assert abs(motion.property('surfaceScale') - before) < 0.005, 'closing jumped to a fixed source'
 QTest.qWait(50)
 before = motion.property('surfaceScale')
 call(motion, 'open')
 assert abs(motion.property('surfaceScale') - before) < 0.005, 'reopening jumped to a fixed source'
-QTest.qWait(300)
+QTest.qWait(500)
 assert abs(motion.property('surfaceScale') - 1) < 0.0001
 assert motion.property('surfaceOpacity') == 1
 assert closed.count() == 0, 'an interrupted close must not hide a reopened launcher'
-call(motion, 'close'); QTest.qWait(230)
+call(motion, 'close'); QTest.qWait(450)
 assert closed.count() == 1, (closed.count(), motion.property("surfaceOpacity"), motion.property("settled"), errors)
 motion.setProperty('animationsEnabled', False)
 call(motion, 'open'); call(motion, 'close'); QTest.qWait(30)
 assert closed.count() == 2, closed
 assert motion.property('surfaceOpacity') == 0
+# Verify velocity continuity and refresh-rate-independent spring samples.
+physical = create(root / 'contents/ui/LauncherMotion.qml')
+physical.findChild(QObject, 'motionFrames').setProperty('running', False)
+call(physical, 'prepare'); call(physical, 'open'); call(physical, 'advance', 0.04)
+assert physical.property('contentOpacity') == 0, 'content must follow the initial panel reveal'
+assert physical.property('surfaceOpacity') > 0.1
+position, velocity = physical.property('surfaceScale'), physical.property('scaleVelocity')
+call(physical, 'close')
+assert physical.property('surfaceScale') == position and physical.property('scaleVelocity') == velocity
+call(physical, 'advance', 0.001)
+assert physical.property('scaleVelocity') > 0, 'reversal must decelerate existing motion before changing direction'
+call(physical, 'advance', 0.07)
+position, velocity = physical.property('surfaceScale'), physical.property('scaleVelocity')
+call(physical, 'open')
+assert physical.property('surfaceScale') == position and physical.property('scaleVelocity') == velocity
+samples = []
+for rate in (60, 144):
+    call(physical, 'prepare'); call(physical, 'open')
+    for _ in range(rate // 4): call(physical, 'advance', 1 / rate)
+    samples.append(tuple(physical.property(name) for name in ('surfaceScale', 'surfaceOpacity', 'contentOpacity')))
+assert all(abs(a - b) < 0.00001 for a, b in zip(*samples)), samples
 with tempfile.TemporaryDirectory() as directory:
     tmp = pathlib.Path(directory)
     for name in ('AppsCategorized.qml', 'Scrollbar.qml', 'AppGridView.qml', 'AllAppsList.qml'):
@@ -244,7 +265,7 @@ Window {
     if native_dialog:
         call(popupHarness, 'setBackend', 0)
         call(popup, 'probeEffect'); QTest.qWait(30)
-        call(popup, 'open'); QTest.qWait(400)
+        call(popup, 'open'); QTest.qWait(550)
         frame = popup.property('nativeGlassFrame')
         assert frame is not None, 'native DialogBackground FrameSvg was not found'
         from PySide6.QtCore import QPoint
@@ -254,8 +275,8 @@ Window {
         assert mask.contains(QPoint(popup.width() // 2, popup.height() // 2))
         call(popup, 'closeWithLaunchAnimation'); QTest.qWait(60)
         assert popup.property('visible'), 'native window was hidden before close completed'
-        call(popup, 'open'); QTest.qWait(400)
-        assert popup.property('visible') and popup.property('title').endswith('|settled')
+        call(popup, 'open'); QTest.qWait(550)
+        assert popup.property('visible') and '|settled|' in popup.property('title')
         call(popup, 'closeWithLaunchAnimation'); QTest.qWait(550)
         assert not popup.property('visible'), 'native close failed to hide the settled window'
         popupHarness.close()
@@ -272,16 +293,17 @@ Window {
     call(popup, 'contextMenuOpened')
     popup.setProperty('active', False); QTest.qWait(220)
     assert popup.property('visible') and not popup.property('closing'), 'menu focus incorrectly dismissed the launcher'
-    call(popup, 'contextMenuClosed'); QTest.qWait(230)
+    call(popup, 'contextMenuClosed'); QTest.qWait(450)
     assert not popup.property('visible') and popupHarness.property('resets') == 1
     call(popupHarness, 'setBackend', 0)
     call(popup, 'probeEffect'); QTest.qWait(30)
     assert popup.property('kwinEffectAvailable'), 'effect probe result was not decoded'
     call(popup, 'open')
     assert popup.property('compositorForSession')
-    assert popup.property('title').startswith('TahoeLauncher Motion v3|')
+    assert popup.property('title').startswith('TahoeLauncher Motion v4|')
+    QTest.qWait(100)
     call(popup, 'closeWithLaunchAnimation')
-    assert popup.property('visible') and popup.property('title').endswith('|close') and popupHarness.property('resets') == 1
+    assert popup.property('visible') and '|close|' in popup.property('title') and popupHarness.property('resets') == 1
     QTest.qWait(60); call(popup, 'toggleFromButton')
     assert popup.property('visible') and popup.property('compositorForSession')
     QTest.qWait(260)

@@ -47,7 +47,7 @@ PlasmaCore.Dialog {
     property int openContextMenus: 0
     property bool kwinEffectAvailable: false
     property bool compositorForSession: false
-    property bool compositorSettled: false
+    readonly property real animationContentOpacity: Math.max(0, Math.min(1, motion.contentOpacity))
     property int backendForSession: 1
     property real anchorX: 0.5
     property real anchorY: 0.5
@@ -59,10 +59,9 @@ PlasmaCore.Dialog {
     readonly property real durationFactor: Math.max(0, Kirigami.Units.longDuration / 200)
     readonly property bool blurEnabled: compositorForSession || (visible && !closing && motion.settled && motion.surfaceOpacity >= 0.999)
     backgroundHints: blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground
-    title: compositorForSession ? "TahoeLauncher Motion v3|" + anchorX.toFixed(4) + "," + anchorY.toFixed(4) + "," + travel + (closing ? "|close" : compositorSettled ? "|settled" : "|open") : "TahoeLauncher"
+    title: compositorForSession ? "TahoeLauncher Motion v4|" + anchorX.toFixed(4) + "," + anchorY.toFixed(4) + "," + travel + "|" + motion.compositorFrame : "TahoeLauncher"
     // Publish the title command with a rendered frame while the window stays mapped.
-    onClosingChanged: Qt.callLater(update)
-    onCompositorSettledChanged: Qt.callLater(update)
+    onTitleChanged: Qt.callLater(update)
     onBackgroundHintsChanged: Qt.callLater(updateNativeBackground)
 
     property int iconSize: {
@@ -88,32 +87,17 @@ PlasmaCore.Dialog {
 
     onVisibleChanged: {
         if (visible) {
-            hiddenReset.stop();
             activatedOnce = false;
             closing = false;
-            if (compositorForSession) {
-                compositorSettled = false;
-                compositorOpen.restart();
-            }
             updatePosition();
-            if (!compositorForSession) {
-                motion.prepare();
-                motion.open();
-            }
+            motion.prepare();
+            motion.open();
             Qt.callLater(updateNativeBackground);
             requestActivate();
         } else {
-            compositorOpen.stop();
-            compositorClose.stop();
-            // A compositor close retains the last frame. Do not reset the
-            // search/model until that frame has finished fading away.
-            if (compositorForSession) {
-                closing = true;
-                hiddenReset.restart();
-            } else {
-                closing = false;
-                reset();
-            }
+            motion.prepare();
+            closing = false;
+            reset();
         }
     }
     onActiveChanged: {
@@ -143,16 +127,9 @@ PlasmaCore.Dialog {
         }
     }
     function open() {
-        compositorClose.stop();
-        hiddenReset.stop();
         if (visible) {
             closing = false;
-            if (compositorForSession) {
-                compositorSettled = false;
-                compositorOpen.restart();
-            } else {
-                motion.open();
-            }
+            motion.open();
             requestActivate();
             return;
         }
@@ -179,11 +156,7 @@ PlasmaCore.Dialog {
         if (!visible || closing)
             return;
         closing = true;
-        compositorOpen.stop();
-        if (compositorForSession)
-            compositorClose.restart();
-        else
-            motion.close();
+        motion.close();
     }
     function maybeDismiss() {
         if (!active && visible && activatedOnce && !closing && openContextMenus === 0)
@@ -242,36 +215,13 @@ PlasmaCore.Dialog {
             pending = false;
         }
     }
-    property QtObject hiddenResetTimer: Timer {
-        id: hiddenReset
-        interval: Math.ceil(200 * root.durationFactor) + 50
-        onTriggered: {
-            if (!root.visible) {
-                root.closing = false;
-                root.reset();
-            }
-        }
-    }
-    property QtObject compositorCloseTimer: Timer {
-        id: compositorClose
-        interval: Math.ceil(180 * root.durationFactor) + 80
-        onTriggered: {
-            if (root.closing)
-                root.visible = false;
-        }
-    }
-    property QtObject compositorOpenTimer: Timer {
-        id: compositorOpen
-        interval: Math.ceil(260 * root.durationFactor) + 80
-        onTriggered: root.compositorSettled = true
-    }
     property Item motionController: LauncherMotion {
         id: motion
         animationsEnabled: root.backendForSession !== 2
         durationFactor: root.durationFactor
         travel: root.travel
         onClosed: {
-            if (root.closing && !root.compositorForSession)
+            if (root.closing)
                 root.visible = false;
         }
     }

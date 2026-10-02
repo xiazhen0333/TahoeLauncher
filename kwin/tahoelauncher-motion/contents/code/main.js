@@ -6,6 +6,7 @@ class TahoeLauncherMotion {
         this.windows = new Map();
         this.phases = new Map();
         this.watched = new Set();
+        this.applyingFrames = new Set();
         effect.animationEnded.connect(this.finished.bind(this));
         effects.windowAdded.connect(this.added.bind(this));
         effects.windowClosed.connect(this.closed.bind(this));
@@ -14,12 +15,14 @@ class TahoeLauncherMotion {
     }
     marker(window) {
         if (!/(^|\s)(?:org\.kde\.)?plasmashell(?:\s|$)/.test(window.windowClass)) return null;
-        const match = /^TahoeLauncher Motion v([23])\|([\d.]+),([\d.]+),(-?\d+)(?:\|(open|close|settled))?(?:$|\s)/.exec(window.caption);
+        const match = /^TahoeLauncher Motion v([234])\|([\d.]+),([\d.]+),(-?\d+)(?:\|(open|close|settled))?(?:\|([\d.]+),([\d.]+))?(?:$|\s)/.exec(window.caption);
         if (!match) return null;
-        if (match[1] === "3" && !match[5]) return null;
+        if (match[1] !== "2" && !match[5]) return null;
         const x = Number(match[2]), y = Number(match[3]), travel = Number(match[4]);
         if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1 || Math.abs(travel) > 10) return null;
-        return { x: x, y: y, travel: travel, phase: match[5] };
+        const frame = match[1] === "4", scale = Number(match[6]), opacity = Number(match[7]);
+        if (frame && (!match[6] || !match[7] || !Number.isFinite(scale) || scale < 0.8 || scale > 1.1 || !Number.isFinite(opacity) || opacity < 0 || opacity > 1)) return null;
+        return { x: x, y: y, travel: travel, phase: match[5], frame: frame, scale: scale, opacity: opacity };
     }
     watch(window) {
         if (!/plasmashell/.test(window.windowClass) || this.watched.has(window)) return;
@@ -27,7 +30,8 @@ class TahoeLauncherMotion {
         window.windowDamaged.connect(w => {
             const marker = this.marker(w);
             if (!marker || !marker.phase || !w.visible) return;
-            if (marker.phase === "settled") this.release(w);
+            if (marker.frame) this.applyFrame(w, marker);
+            else if (marker.phase === "settled") this.release(w);
             else this.transition(w, marker.phase === "open");
         });
         window.windowHiddenChanged.connect(w => {
@@ -37,12 +41,17 @@ class TahoeLauncherMotion {
                 this.release(w);
                 this.phases.delete(w);
             }
+            else if (marker.frame) this.applyFrame(w, marker);
             else this.transition(w, w.visible);
         });
     }
     added(window) {
         this.watch(window);
-        if (window.visible && this.marker(window)) this.transition(window, true);
+        const marker = this.marker(window);
+        if (window.visible && marker) {
+            if (marker.frame) this.applyFrame(window, marker);
+            else this.transition(window, true);
+        }
     }
     closed(window) {
         const marker = this.marker(window);
@@ -58,6 +67,45 @@ class TahoeLauncherMotion {
             value1: (marker.x - 0.5) * window.width * (1 - scale),
             value2: (marker.y - 0.5) * window.height * (1 - scale) + marker.travel
         };
+    }
+    applyFrame(window, marker) {
+        // Creating or retargeting an animation can synchronously damage the window.
+        if (this.applyingFrames.has(window)) return;
+        this.applyingFrames.add(window);
+        try {
+            this.updateFrame(window, marker);
+        } finally {
+            this.applyingFrames.delete(window);
+        }
+    }
+    updateFrame(window, marker) {
+        // The final neutral sample can arrive before a caption-only settled update.
+        if (marker.phase === "settled" || (marker.phase === "open" && marker.scale > 0.9997 && marker.opacity > 0.99998) || effects.hasActiveFullScreenEffect) {
+            this.release(window);
+            return;
+        }
+        // Qt supplies the spring sample; KWin transforms content and blur together.
+        const progress = Math.max(0, Math.min(1, (1 - marker.scale) / 0.09));
+        const translation = this.translation(window, marker, marker.scale);
+        translation.value2 = (marker.y - 0.5) * window.height * (1 - marker.scale) + marker.travel * progress;
+        const values = [marker.scale, marker.opacity, translation];
+        const types = [Effect.Scale, Effect.Opacity, Effect.Translation];
+        let state = this.windows.get(window);
+        if (!state) {
+            effect.grab(window, Effect.WindowAddedGrabRole, true);
+            effect.grab(window, Effect.WindowClosedGrabRole, true);
+            window.setData(Effect.WindowForceBlurRole, true);
+            window.setData(Effect.WindowForceBackgroundContrastRole, true);
+            state = { ids: [], mapped: true, frame: true };
+            this.windows.set(window, state);
+        }
+        for (let i = 0; i < 3; ++i) {
+            if (!state.ids[i] || !retarget(state.ids[i], values[i], 1)) {
+                state.ids[i] = set({ window: window, type: types[i], from: values[i], to: values[i], duration: 1, curve: QEasingCurve.Linear, keepAlive: false })[0];
+            }
+            // Hold this exact frame until Qt publishes the next spring sample.
+            freezeInTime(state.ids[i], 1);
+        }
     }
     transition(window, opening) {
         const marker = this.marker(window);
@@ -112,7 +160,7 @@ class TahoeLauncherMotion {
     }
     finished(window) {
         const state = this.windows.get(window);
-        if (!state || --state.pending > 0) return;
+        if (!state || state.frame || --state.pending > 0) return;
         // A mapped close holds opacity at zero until Plasma actually hides it.
         if (state.mapped && !state.opening) return;
         this.release(window);
