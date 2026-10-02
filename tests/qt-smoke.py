@@ -104,7 +104,7 @@ Window {
 ''')
     # The configured column count must fit the real loader without an extra margin.
     drag = tmp / 'org/kde/draganddrop'; drag.mkdir(parents=True)
-    (drag / 'qmldir').write_text('module org.kde.draganddrop\nStub 1.0 Stub.qml\n')
+    (drag / 'qmldir').write_text('module org.kde.draganddrop\nStub 2.0 Stub.qml\n')
     (drag / 'Stub.qml').write_text('import QtQml\nQtObject {}\n')
     (tmp / 'AppCategorySwitcher.qml').write_text('import QtQuick\nItem { property var model; signal categorySwitched(int index) }\n')
     (tmp / 'AppListView.qml').write_text('import QtQuick\nItem { property var model; property bool showSectionSeparator }\n')
