@@ -41,19 +41,28 @@ PlasmaCore.Dialog {
     location: PlasmaCore.Types.Floating
     color: "transparent"
     hideOnWindowDeactivate: false
+    property Item launcherButton
     property bool closing: false
     property bool activatedOnce: false
     property int openContextMenus: 0
     property bool kwinEffectAvailable: false
     property bool compositorForSession: false
+    property bool compositorSettled: false
     property int backendForSession: 1
     property real anchorX: 0.5
     property real anchorY: 0.5
     property int travel: 0
+    readonly property int shadowPadding: 24
+    readonly property string glassPath: Qt.resolvedUrl("materials/glass.svg").toString().replace(/^file:\/\//, "")
+    readonly property string nativeGlassPath: Qt.resolvedUrl("materials/glass-panel.svg").toString().replace(/^file:\/\//, "")
+    property var nativeGlassFrame: null
     readonly property real durationFactor: Math.max(0, Kirigami.Units.longDuration / 200)
     readonly property bool blurEnabled: compositorForSession || (visible && !closing && motion.settled && motion.surfaceOpacity >= 0.999)
     backgroundHints: blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground
-    title: compositorForSession ? "TahoeLauncher Motion v2|" + anchorX.toFixed(4) + "," + anchorY.toFixed(4) + "," + travel : "TahoeLauncher"
+    title: compositorForSession ? "TahoeLauncher Motion v3|" + anchorX.toFixed(4) + "," + anchorY.toFixed(4) + "," + travel + (closing ? "|close" : compositorSettled ? "|settled" : "|open") : "TahoeLauncher"
+    // Publish the title command with a rendered frame while the window stays mapped.
+    onClosingChanged: Qt.callLater(update)
+    onCompositorSettledChanged: Qt.callLater(update)
     onBackgroundHintsChanged: Qt.callLater(updateNativeBackground)
 
     property int iconSize: {
@@ -82,6 +91,10 @@ PlasmaCore.Dialog {
             hiddenReset.stop();
             activatedOnce = false;
             closing = false;
+            if (compositorForSession) {
+                compositorSettled = false;
+                compositorOpen.restart();
+            }
             updatePosition();
             if (!compositorForSession) {
                 motion.prepare();
@@ -90,6 +103,8 @@ PlasmaCore.Dialog {
             Qt.callLater(updateNativeBackground);
             requestActivate();
         } else {
+            compositorOpen.stop();
+            compositorClose.stop();
             // A compositor close retains the last frame. Do not reset the
             // search/model until that frame has finished fading away.
             if (compositorForSession) {
@@ -111,7 +126,7 @@ PlasmaCore.Dialog {
     onHeightChanged: updatePosition()
 
     function updatePosition() {
-        if (!parent)
+        if (!launcherButton)
             return;
         var pos = popupPosition(width, height);
         x = pos.x;
@@ -121,17 +136,23 @@ PlasmaCore.Dialog {
             anchorY = 0.5;
             travel = 0;
         } else {
-            var buttonCenter = parent.mapToGlobal(parent.width / 2, parent.height / 2);
+            var buttonCenter = launcherButton.mapToGlobal(launcherButton.width / 2, launcherButton.height / 2);
             anchorX = Math.max(0, Math.min(1, (buttonCenter.x - x) / Math.max(1, width)));
             anchorY = Plasmoid.location === PlasmaCore.Types.TopEdge ? 0 : 1;
             travel = anchorY === 0 ? -8 : 8;
         }
     }
     function open() {
+        compositorClose.stop();
         hiddenReset.stop();
         if (visible) {
             closing = false;
-            motion.open();
+            if (compositorForSession) {
+                compositorSettled = false;
+                compositorOpen.restart();
+            } else {
+                motion.open();
+            }
             requestActivate();
             return;
         }
@@ -158,8 +179,9 @@ PlasmaCore.Dialog {
         if (!visible || closing)
             return;
         closing = true;
+        compositorOpen.stop();
         if (compositorForSession)
-            visible = false;
+            compositorClose.restart();
         else
             motion.close();
     }
@@ -177,9 +199,28 @@ PlasmaCore.Dialog {
     function updateNativeBackground() {
         var kids = contentItem ? contentItem.children : [];
         for (var i = 0; i < kids.length; ++i) {
-            if (kids[i] && kids[i] !== fs)
+            if (kids[i] && kids[i] !== fs) {
+                // Dialog exposes its native FrameSvg through this wrapper. Keep
+                // its mask and our material on the same SVG, including corners.
+                var frames = kids[i].children;
+                for (var j = 0; frames && j < frames.length; ++j) {
+                    if (frames[j].imagePath !== undefined && nativeGlassFrame !== frames[j]) {
+                        nativeGlassFrame = frames[j];
+                        nativeGlassFrame.imagePathChanged.connect(syncGlassPath);
+                        syncGlassPath();
+                        // Recompute the native blur mask after replacing
+                        // the SVG. The path hook above also handles theme resets.
+                        root.backgroundHints = PlasmaCore.Types.NoBackground;
+                        root.backgroundHints = Qt.binding(() => root.blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground);
+                    }
+                }
                 kids[i].visible = compositorForSession;
+            }
         }
+    }
+    function syncGlassPath() {
+        if (nativeGlassFrame && blurEnabled && nativeGlassFrame.imagePath !== nativeGlassPath)
+            nativeGlassFrame.imagePath = nativeGlassPath;
     }
     function reset() {
         main.reset();
@@ -211,6 +252,19 @@ PlasmaCore.Dialog {
             }
         }
     }
+    property QtObject compositorCloseTimer: Timer {
+        id: compositorClose
+        interval: Math.ceil(180 * root.durationFactor) + 80
+        onTriggered: {
+            if (root.closing)
+                root.visible = false;
+        }
+    }
+    property QtObject compositorOpenTimer: Timer {
+        id: compositorOpen
+        interval: Math.ceil(260 * root.durationFactor) + 80
+        onTriggered: root.compositorSettled = true
+    }
     property Item motionController: LauncherMotion {
         id: motion
         animationsEnabled: root.backendForSession !== 2
@@ -235,15 +289,15 @@ PlasmaCore.Dialog {
         if (Plasmoid.configuration.offsetX > 0 && Plasmoid.configuration.floating) {
             offset = Plasmoid.configuration.offsetX;
         } else {
-            offset = Plasmoid.configuration.floating ? parent.height * 0.35 : 0;
+            offset = Plasmoid.configuration.floating ? launcherButton.height * 0.35 : 0;
         }
         // Fall back to bottom-left of screen area when the applet is on the desktop or floating.
         var x = offset;
         var y = screen.height - height - offset;
         var horizMidPoint = screen.x + (screen.width / 2);
         var vertMidPoint = screen.y + (screen.height / 2);
-        var appletTopLeft = parent.mapToGlobal(0, 0);
-        var appletBottomLeft = parent.mapToGlobal(0, parent.height);
+        var appletTopLeft = launcherButton.mapToGlobal(0, 0);
+        var appletBottomLeft = launcherButton.mapToGlobal(0, launcherButton.height);
         if (Plasmoid.configuration.launcherPosition != 0) {
             x = horizMidPoint - width / 2;
         } else {
@@ -263,15 +317,15 @@ PlasmaCore.Dialog {
                     if (Plasmoid.configuration.offsetY > 0) {
                         offset = (125 * 1) / 2 + Plasmoid.configuration.offsetY;
                     } else {
-                        offset = (125 * 1) / 2 + parent.height * 0.125;
+                        offset = (125 * 1) / 2 + launcherButton.height * 0.125;
                     }
                 }
-                y = screen.y + parent.height + panelSvg.margins.bottom + offset;
+                y = screen.y + launcherButton.height + panelSvg.margins.bottom + offset;
             } else {
                 if (Plasmoid.configuration.offsetY > 0) {
                     offset = Plasmoid.configuration.offsetY;
                 }
-                y = screen.y + screen.height - parent.height - height - panelSvg.margins.top - offset * 2.5;
+                y = screen.y + screen.height - launcherButton.height - height - panelSvg.margins.top - offset * 2.5;
             }
         } else {
             y = vertMidPoint - height / 2;
@@ -282,9 +336,9 @@ PlasmaCore.Dialog {
     mainItem: FocusScope {
         id: fs
         focus: true
-        width: (root.cellSizeWidth * Plasmoid.configuration.numberColumns) + innerPadding * 2 + dialogSvg.margins.left + dialogSvg.margins.right
+        width: (root.cellSizeWidth * Plasmoid.configuration.numberColumns) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2)
         // Searchbar.height + separator.height  + categories switcher.height
-        height: 40 + 2 + 40 + (root.cellSizeHeight * rows) + innerPadding + dialogSvg.margins.top + dialogSvg.margins.bottom
+        height: 40 + 2 + 40 + (root.cellSizeHeight * rows) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2)
 
         // We want the MainView to have an uniform margin through different plasma themes
         property real innerPadding: 15
@@ -310,15 +364,16 @@ PlasmaCore.Dialog {
                 id: dialogBackground
                 visible: !root.compositorForSession
                 anchors.fill: parent
-                imagePath: "dialogs/background"
+                imagePath: root.glassPath
             }
 
             MainView {
                 id: main
-                width: parent.width - (fs.innerPadding)
-                height: parent.height - (fs.innerPadding * 2)
-                x: fs.innerPadding
-                y: fs.innerPadding
+                readonly property real contentPadding: fs.innerPadding + (root.compositorForSession ? 0 : root.shadowPadding)
+                width: parent.width - contentPadding * 2
+                height: parent.height - contentPadding * 2
+                x: contentPadding
+                y: contentPadding
             }
         }
 

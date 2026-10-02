@@ -75,7 +75,7 @@ ColumnLayout {
 	AppCategorySwitcher {
 		id: categorySwitcher
 
-		Layout.preferredWidth: parent.width-fs.innerPadding
+		Layout.fillWidth: true
     	Layout.preferredHeight: visible ? 40 : 0
 		model: appsCategoriesList
 		visible: !showItemsCategorized && main.showAllApps
@@ -115,7 +115,6 @@ ColumnLayout {
 		AppGridView {
 			id: grid
 			anchors.fill: parent
-			anchors.leftMargin: fs.innerPadding / 2
 			
 			model: main.showAllApps ? currentModel : globalFavorites
 			canMoveWithKeyboard: true

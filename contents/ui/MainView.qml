@@ -38,7 +38,7 @@ Item {
     readonly property bool isTop: plasmoid.location == PlasmaCore.Types.TopEdge && plasmoid.configuration.launcherPosition != 2 && !plasmoid.configuration.floating
 
     property bool isDarkTheme: ColorType.isDark(bgColor)
-    property color contrastBgColor: isDarkTheme ? Qt.rgba(255, 255, 255, 0.15) : Qt.rgba(0, 0, 0, 0.1)
+    property color contrastBgColor: isDarkTheme ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(0, 0, 0, 0.065)
     property color dimmedTextColor: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.7)
 
     property bool showAllApps: true
@@ -66,7 +66,6 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 40
             Layout.maximumHeight: Layout.preferredHeight
-            Layout.rightMargin: fs.innerPadding
             showMenuButton: !searching
             Keys.priority: Keys.AfterItem
             Keys.forwardTo: searching ? searchList : appList.viewItem
@@ -74,7 +73,6 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.rightMargin: fs.innerPadding
             height: 1.5
             color: main.contrastBgColor
         }

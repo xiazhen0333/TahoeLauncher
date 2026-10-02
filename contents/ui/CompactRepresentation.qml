@@ -62,7 +62,7 @@ Item {
     }
 
     Component.onCompleted: {
-        dashWindow = menuRepresentation.createObject(root);
+        dashWindow = menuRepresentation.createObject(root, {launcherButton: root});
         plasmoid.activated.connect(function() {
             dashWindow.toggleFromButton();
         });

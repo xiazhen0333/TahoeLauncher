@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Run with Python + PySide6. Uses real Qt Quick; KDE-only primitives are stubbed."""
 import os, pathlib, shutil, tempfile, time
+native_dialog = os.environ.get('TAHOE_NATIVE_DIALOG') == '1'
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 os.environ.setdefault('QT_QUICK_BACKEND', 'software')
 os.environ.setdefault('QML_DISABLE_DISK_CACHE', '1')
@@ -51,13 +52,14 @@ assert closed.count() == 2, closed
 assert motion.property('surfaceOpacity') == 0
 with tempfile.TemporaryDirectory() as directory:
     tmp = pathlib.Path(directory)
-    for name in ('AppsCategorized.qml', 'Scrollbar.qml'):
+    for name in ('AppsCategorized.qml', 'Scrollbar.qml', 'AppGridView.qml', 'AllAppsList.qml'):
         shutil.copy(root / 'contents/ui' / name, tmp / name)
     (tmp / 'js').mkdir()
     shutil.copy(root / 'contents/ui/js/categoryRows.js', tmp / 'js/categoryRows.js')
     kd = tmp / 'org/kde/kirigami'; kd.mkdir(parents=True)
-    (kd / 'qmldir').write_text('module org.kde.kirigami\nWheelHandler 1.0 WheelHandler.qml\n')
-    (kd / 'WheelHandler.qml').write_text('import QtQuick\nItem { property var target; property bool filterMouseEvents: false }\n')
+    (kd / 'qmldir').write_text('module org.kde.kirigami\nWheelHandler 1.0 WheelHandler.qml\nsingleton Units 1.0 Units.qml\n')
+    (kd / 'Units.qml').write_text('pragma Singleton\nimport QtQml\nQtObject { property int shortDuration: 100 }\n')
+    (kd / 'WheelHandler.qml').write_text('import QtQuick\nItem { property var target; property bool filterMouseEvents: false; property real horizontalStepSize; property real verticalStepSize; signal wheel(var wheel) }\n')
     km = tmp / 'org/kde/kitemmodels'; km.mkdir(parents=True)
     (km / 'qmldir').write_text('module org.kde.kitemmodels\nsingleton KRoleNames 1.0 KRoleNames.qml\n')
     (km / 'KRoleNames.qml').write_text('pragma Singleton\nimport QtQml\nQtObject {}\n')
@@ -100,6 +102,30 @@ Window {
     }
 }
 ''')
+    # The configured column count must fit the real loader without an extra margin.
+    drag = tmp / 'org/kde/draganddrop'; drag.mkdir(parents=True)
+    (drag / 'qmldir').write_text('module org.kde.draganddrop\nStub 1.0 Stub.qml\n')
+    (drag / 'Stub.qml').write_text('import QtQml\nQtObject {}\n')
+    (tmp / 'AppCategorySwitcher.qml').write_text('import QtQuick\nItem { property var model; signal categorySwitched(int index) }\n')
+    (tmp / 'AppListView.qml').write_text('import QtQuick\nItem { property var model; property bool showSectionSeparator }\n')
+    (tmp / 'GridHarness.qml').write_text('''import QtQuick
+import QtQuick.Window
+Window {
+    width: 500; height: 400; visible: true
+    QtObject { id: counter; property int live: 0; property int peak: 0 }
+    QtObject { id: root; property int columns: 5; property int cellSizeWidth: 100; property int cellSizeHeight: 100 }
+    QtObject { id: fs; property real innerPadding: 15 }
+    QtObject { id: main; property bool showAllApps: true; property color dimmedTextColor: "#888888" }
+    QtObject { id: plasmoid; property QtObject configuration: QtObject {
+        property bool showAllAppsInGrid: true; property bool showAllAppsInList: false
+        property bool showAllAppsCategorized: false; property int numberColumns: 5
+    } }
+    ListModel { id: source }
+    QtObject { id: rootModel; property int count: 0; function modelForRow(i) { return source } }
+    AllAppsList { objectName: "allApps"; anchors.fill: parent }
+    Component.onCompleted: { for (var i = 0; i < 20; ++i) source.append({name: "App " + i}) }
+}
+''')
     engine.addImportPath(str(tmp))
     obj = create(tmp / 'Harness.qml'); QTest.qWait(200)
     categories = obj.findChild(QObject, 'categories')
@@ -115,8 +141,14 @@ Window {
     call(categories, 'toggleCategory', 0); QTest.qWait(150)
     assert rows.property('count') == 2
     obj.close(); obj.deleteLater(); QTest.qWait(50)
+    gridWindow = create(tmp / 'GridHarness.qml'); QTest.qWait(150)
+    grid = gridWindow.findChild(QObject, 'allApps').property('viewItem')
+    assert grid.property('width') == 500, 'an extra margin reduced the configured grid width'
+    cells = [cell for cell in grid.property('contentItem').childItems() if cell.objectName() == 'instrumentedCell']
+    assert sum(cell.y() == 0 for cell in cells) == 5, 'the configured 5 columns wrapped to 4'
+    gridWindow.close(); gridWindow.deleteLater(); QTest.qWait(30)
 assert not errors, '\n'.join(errors)
-print(f'PASS: Qt continuous open/close, no-animation mode; 3000 apps, bounded delegates (peak {peak})')
+print(f'PASS: Qt continuous open/close, no-animation mode, 5-column grid; 3000 apps, bounded delegates (peak {peak})')
 
 # Exercise the actual popup controller with small KDE API stubs. This verifies
 # backend latching and hide/reset ordering, not native KWin rendering.
@@ -127,6 +159,7 @@ with tempfile.TemporaryDirectory() as directory:
     tmp = pathlib.Path(directory)
     for name in ('MenuRepresentation.qml', 'LauncherMotion.qml'):
         shutil.copy(root / 'contents/ui' / name, tmp / name)
+    shutil.copytree(root / 'contents/ui/materials', tmp / 'materials')
     (tmp / 'MainView.qml').write_text('import QtQuick\nItem { function reset() { counter.resets++ } function reload() { reset() } }\n')
     def module(uri, entries):
         location = tmp / uri.replace('.', '/')
@@ -136,7 +169,7 @@ with tempfile.TemporaryDirectory() as directory:
             (location / (name + '.qml')).write_text(content)
             names.append(('singleton ' if singleton else '') + name + ' 1.0 ' + name + '.qml')
         (location / 'qmldir').write_text('module ' + uri + '\n' + '\n'.join(names) + '\n')
-    module('org.kde.plasma.core', {
+    if not native_dialog: module('org.kde.plasma.core', {
         'Dialog': ('''import QtQuick
 Item {
     width: 620; height: 520; visible: false
@@ -151,6 +184,7 @@ Item {
     property bool active: false
     property Item contentItem: Item { Rectangle { width: 620; height: 520 } }
     function requestActivate() { active = false; active = true }
+    function update() {}
 }
 ''', False),
         'Types': ('''pragma Singleton
@@ -178,7 +212,7 @@ QtObject {
 }
 ''', True)
     })
-    module('org.kde.ksvg', {'FrameSvgItem': ('import QtQuick\nItem { property string imagePath; property var margins: ({top: 8, bottom: 8, left: 8, right: 8}) }\n', False)})
+    if not native_dialog: module('org.kde.ksvg', {'FrameSvgItem': ('import QtQuick\nItem { property string imagePath; property var margins: ({top: 8, bottom: 8, left: 8, right: 8}) }\n', False)})
     module('org.kde.kirigami', {'Units': ('pragma Singleton\nimport QtQml\nQtObject { property int longDuration: 200; property int gridUnit: 18; property var iconSizes: ({smallMedium: 22, medium: 32, large: 48, huge: 64}) }\n', True)})
     module('org.kde.plasma.plasma5support', {'DataSource': ('''import QtQml
 QtObject {
@@ -201,12 +235,38 @@ Window {
     QtObject { id: panelSvg; property var margins: ({top:8,bottom:8,left:8,right:8}) }
     QtObject { id: dialogSvg; property var margins: ({top:8,bottom:8,left:8,right:8}) }
     function setBackend(value) { Plasmoid.configuration.animationBackend = value }
-    Item { width: 48; height: 48; MenuRepresentation {} }
+    Item { id: button; width: 48; height: 48; MenuRepresentation { launcherButton: button } }
 }
 ''')
     engine.addImportPath(str(tmp))
     popupHarness = create(tmp / 'PopupHarness.qml'); QTest.qWait(30)
     popup = popupHarness.findChild(QObject, 'popupWindow')
+    if native_dialog:
+        call(popupHarness, 'setBackend', 0)
+        call(popup, 'probeEffect'); QTest.qWait(30)
+        call(popup, 'open'); QTest.qWait(400)
+        frame = popup.property('nativeGlassFrame')
+        assert frame is not None, 'native DialogBackground FrameSvg was not found'
+        from PySide6.QtCore import QPoint
+        mask = frame.property('mask')
+        assert frame.property('imagePath').endswith('/materials/glass-panel.svg')
+        assert not mask.contains(QPoint(1, 1)), 'transparent corners must not receive blur'
+        assert mask.contains(QPoint(popup.width() // 2, popup.height() // 2))
+        call(popup, 'closeWithLaunchAnimation'); QTest.qWait(60)
+        assert popup.property('visible'), 'native window was hidden before close completed'
+        call(popup, 'open'); QTest.qWait(400)
+        assert popup.property('visible') and popup.property('title').endswith('|settled')
+        call(popup, 'closeWithLaunchAnimation'); QTest.qWait(550)
+        assert not popup.property('visible'), 'native close failed to hide the settled window'
+        popupHarness.close()
+        # Native KDE reports unsupported platform/shadow capabilities offscreen.
+        expected = ('QObject::installEventFilter(): Cannot filter events for objects in a different thread.',
+                    'Could not find any platform plugin', 'Member visible of the object PlasmaQuick::Dialog overrides',
+                    "Couldn't create KWindowShadow for", 'This plugin does not support raise()')
+        unexpected = [text for text in errors if not text.startswith(expected)]
+        assert not unexpected, '\n'.join(unexpected)
+        print('PASS: native Plasma Dialog glass mask, transparent corners, mapped reversal and deferred hide')
+        raise SystemExit(0)
     call(popup, 'open'); QTest.qWait(300)
     assert popup.property('visible') and not popup.property('compositorForSession')
     call(popup, 'contextMenuOpened')
@@ -219,16 +279,16 @@ Window {
     assert popup.property('kwinEffectAvailable'), 'effect probe result was not decoded'
     call(popup, 'open')
     assert popup.property('compositorForSession')
-    assert popup.property('title').startswith('TahoeLauncher Motion v2|')
+    assert popup.property('title').startswith('TahoeLauncher Motion v3|')
     call(popup, 'closeWithLaunchAnimation')
-    assert not popup.property('visible') and popupHarness.property('resets') == 1
+    assert popup.property('visible') and popup.property('title').endswith('|close') and popupHarness.property('resets') == 1
     QTest.qWait(60); call(popup, 'toggleFromButton')
     assert popup.property('visible') and popup.property('compositorForSession')
     QTest.qWait(260)
     assert popupHarness.property('resets') == 1, 'pending close reset a reopened window'
     call(popupHarness, 'setBackend', 2)
     assert popup.property('compositorForSession'), 'backend changed in the middle of a cycle'
-    call(popup, 'closeWithLaunchAnimation'); QTest.qWait(280)
+    call(popup, 'closeWithLaunchAnimation'); QTest.qWait(550)
     call(popup, 'open')
     assert not popup.property('compositorForSession')
     call(popup, 'closeWithLaunchAnimation'); QTest.qWait(30)

@@ -14,7 +14,7 @@ Item {
     property int modelRevision: 0
     property var expandedCategories: ({})
     readonly property int columns: root.columns
-    readonly property real availableWidth: width - fs.innerPadding
+    readonly property real availableWidth: width
     property var rowDescriptors: []
     focus: true
     Keys.forwardTo: [rowsView]
@@ -197,7 +197,6 @@ Item {
                         }
                     }
                     Row {
-                        x: fs.innerPadding / 2
                         Repeater {
                             id: cells
                             model: Math.max(0, Math.min(appsCategorized.columns, appsCategorized.categorySources[rowLoader.modelData.category].count - rowLoader.modelData.firstIndex))

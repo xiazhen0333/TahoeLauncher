@@ -26,6 +26,12 @@ function harness() {
                 return id;
             });
         },
+        set(options) {
+            const ids = context.animate(options);
+            ids.forEach(id => running.get(id).persistent = true);
+            return ids;
+        },
+        cancel(id) { running.delete(id); },
         retarget(id, target, duration) {
             const current = running.get(id);
             if (!current) return false;
@@ -39,17 +45,46 @@ function harness() {
     vm.runInContext(code.replace('new TahoeLauncherMotion();', 'globalThis.motion = new TahoeLauncherMotion();'), context);
     const window = (caption = 'TahoeLauncher Motion v2|0.25,1.0000,8', windowClass = 'plasmashell org.kde.plasmashell') => {
         const data = new Map();
-        return { caption, windowClass, visible: true, width: 600, height: 500, windowHiddenChanged: new Signal(), data,
+        return { caption, windowClass, visible: true, width: 600, height: 500, windowHiddenChanged: new Signal(), windowDamaged: new Signal(), data,
             setData(role, value) { data.set(role, value); }
         };
     };
     const finish = (w, type) => {
         const entry = [...running].find(([, a]) => a.window === w && a.type === type);
         assert.ok(entry, 'expected a running animation');
-        running.delete(entry[0]);
+        if (!entry[1].persistent) running.delete(entry[0]);
         effect.animationEnded.emit(w, 0);
     };
     return { context, effect, effects, running, calls, grabs, window, finish };
+}
+{
+    const h = harness(), w = h.window('TahoeLauncher Motion v3|0.5,0.5,0|open');
+    h.effects.windowAdded.emit(w);
+    h.finish(w, h.context.Effect.Opacity);
+    w.caption = 'TahoeLauncher Motion v3|0.5,0.5,0|close';
+    w.windowDamaged.emit(w);
+    assert.equal(h.calls.filter(x => x.retarget).length, 3, 'completed persistent channels still reverse');
+    w.caption = 'TahoeLauncher Motion v3|0.5,0.5,0|open';
+    w.windowDamaged.emit(w);
+    assert.equal(h.calls.filter(x => x.retarget).length, 6, 'mapped reopening retargets the same window');
+    w.caption = 'TahoeLauncher Motion v3|0.5,0.5,0|settled';
+    w.windowDamaged.emit(w);
+    assert.equal(h.running.size, 0, 'settled opening removes persistent transforms');
+    const count = h.calls.length;
+    w.windowDamaged.emit(w);
+    assert.equal(h.calls.length, count, 'ordinary repaint must not restart settled opening');
+    w.caption = 'TahoeLauncher Motion v3|0.5,0.5,0|close';
+    w.windowDamaged.emit(w);
+    for (const type of [h.context.Effect.Opacity, h.context.Effect.Scale, h.context.Effect.Translation]) h.finish(w, type);
+    assert.equal(h.running.size, 3, 'completed close remains invisible until actual hide');
+    assert.equal(w.data.get(h.context.Effect.WindowForceBlurRole), true);
+    w.visible = false;
+    w.windowHiddenChanged.emit(w);
+    h.effects.windowClosed.emit(w);
+    assert.equal(h.running.size, 0, 'actual hide cancels retained channels');
+    assert.equal(h.grabs.size, 0);
+    h.effects.windowDeleted.emit(w);
+    assert.equal(h.context.motion.phases.size, 0);
 }
 {
     const h = harness();
