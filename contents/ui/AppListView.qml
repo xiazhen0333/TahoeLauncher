@@ -43,6 +43,8 @@ ListView {
 
     focus: true
     clip: true
+    reuseItems: true
+    cacheBuffer: height / 2
     currentIndex: count > 0 ? 0 : -1
     interactive: height < contentHeight
     boundsBehavior: Flickable.StopAtBounds
@@ -103,9 +105,6 @@ ListView {
 
 		onWheel: wheel => {
 
-			if (wheel.angleDelta.y !== 0) { // This provides horizontal scrolling
-				listView.flick(wheel.angleDelta.y * 15, 0);
-			}
 
 			listView.movedWithWheel = true
 			listView.movedWithKeyboard = false
@@ -113,15 +112,6 @@ ListView {
 		}
     }
 
-    Connections {
-		target: root
-		function onVisibleChanged() {
-			if (!root.visible) {
-				listView.currentIndex = 0
-				listView.positionViewAtBeginning()
-			}
-		}
-    }
 
     // Used to block hover events temporarily after using keyboard navigation.
     // If you have one hand on the touch pad or mouse and another hand on the keyboard,
@@ -139,7 +129,7 @@ ListView {
     }
 
     function focusCurrentItem(event, focusReason) {
-		currentItem.forceActiveFocus(focusReason)
+		if (currentItem) currentItem.forceActiveFocus(focusReason)
 		event.accepted = true
     }
 

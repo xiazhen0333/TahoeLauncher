@@ -28,6 +28,7 @@ RowLayout {
         Layout.fillHeight: true
         Layout.fillWidth: true
         font.pointSize: 18
+        color: main.textColor
 
         placeholderText: i18n("Applications")
         placeholderTextColor: main.dimmedTextColor

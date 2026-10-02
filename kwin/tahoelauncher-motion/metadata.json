@@ -1,0 +1,16 @@
+{
+    "KPackageStructure": "KWin/Effect",
+    "KPlugin": {
+        "Id": "tahoelauncher-motion",
+        "Name": "Tahoe Launcher Motion",
+        "Description": "Continuous scale and fade for Tahoe Launcher with compositor background blur",
+        "Version": "0.2.0",
+        "License": "GPL-2.0-or-later",
+        "EnabledByDefault": false,
+        "Category": "Window Open/Close Animation",
+        "Icon": "preferences-system-windows-effect-scale",
+        "Authors": [{ "Name": "TahoeLauncher contributors" }]
+    },
+    "X-KDE-Ordering": 55,
+    "X-Plasma-API": "javascript"
+}
