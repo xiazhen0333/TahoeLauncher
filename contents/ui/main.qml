@@ -76,6 +76,7 @@ PlasmoidItem {
         flat: true
         sorted: true
         showSeparators: false
+        showRootSeparator: false
         appletInterface: kicker
 
         showAllApps: true
