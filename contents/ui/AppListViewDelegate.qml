@@ -1,6 +1,5 @@
 import QtQuick 2.12
 import QtQuick.Layouts 1.12
-import Qt5Compat.GraphicalEffects
 import org.kde.plasma.components 3.0 as PlasmaComponents
 import org.kde.kirigami 2.13 as Kirigami
 import QtQuick.Controls 2.15
@@ -31,6 +30,11 @@ T.ItemDelegate {
 
 	property bool hasActionList: ((model.favoriteId !== null) || (("hasActionList" in model) && (model.hasActionList !== null)))
 
+    ListView.onPooled: {
+        isDraging = false
+        if (actionMenu.opened && actionMenu.menu) actionMenu.menu.close()
+    }
+    ListView.onReused: isDraging = false
 	property var triggerModel
 
 	onAboutToShowActionMenu: {
@@ -153,6 +157,7 @@ T.ItemDelegate {
 	}
 	ActionMenu {
 		id: actionMenu
+        launcherWindow: root
 
 		onActionClicked: {
 			visualParent.actionTriggered(actionId, actionArgument);

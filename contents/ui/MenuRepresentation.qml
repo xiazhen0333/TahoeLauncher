@@ -26,173 +26,325 @@ import QtQml
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PlasmaComponents
 import org.kde.plasma.plasmoid
+import org.kde.ksvg as KSvg
 import org.kde.kirigami as Kirigami
+import org.kde.plasma.plasma5support as P5Support
 
 PlasmaCore.Dialog {
-	id: root
+    id: root
 
-	objectName: "popupWindow"
-	flags: Qt.WindowStaysOnTopHint
+    objectName: "popupWindow"
+    flags: Qt.WindowStaysOnTopHint
 
-	location: Plasmoid.configuration.floating || Plasmoid.configuration.launcherPosition == 2 ? "Floating" : Plasmoid.location
-	hideOnWindowDeactivate: true
+    // Floating disables KWin's generic edge-slide protocol for this window.
+    // popupPosition() still handles placement next to the user's panel.
+    location: PlasmaCore.Types.Floating
+    color: "transparent"
+    hideOnWindowDeactivate: false
+    property Item launcherButton
+    property bool closing: false
+    property bool activatedOnce: false
+    property int openContextMenus: 0
+    property bool kwinEffectAvailable: false
+    property bool compositorForSession: false
+    property int backendForSession: 1
+    property real anchorX: 0.5
+    property real anchorY: 0.5
+    property int travel: 0
+    readonly property int shadowPadding: 24
+    // Keep the surface and its shadow inside the QML window when enlarged.
+    readonly property int motionPadding: compositorForSession || !motion.running ? 0 : Math.ceil(Math.max(
+        cellSizeWidth * columns + 30 + shadowPadding * 2,
+        82 + cellSizeHeight * rows + 30 + shadowPadding * 2) * (motion.openingScale - 1) / 2)
+    readonly property string glassPath: Qt.resolvedUrl("materials/glass.svg").toString().replace(/^file:\/\//, "")
+    readonly property string nativeGlassPath: Qt.resolvedUrl("materials/glass-panel.svg").toString().replace(/^file:\/\//, "")
+    property var nativeGlassFrame: null
+    readonly property real durationFactor: Math.max(0, Kirigami.Units.longDuration / 200)
+    readonly property bool blurEnabled: compositorForSession || (visible && !closing && motion.settled && motion.surfaceOpacity >= 0.999)
+    backgroundHints: blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground
+    title: compositorForSession ? "TahoeLauncher Motion v4|" + anchorX.toFixed(4) + "," + anchorY.toFixed(4) + "," + travel + "|" + motion.compositorFrame : "TahoeLauncher"
+    // Publish the title command with a rendered frame while the window stays mapped.
+    onTitleChanged: Qt.callLater(update)
+    onBackgroundHintsChanged: Qt.callLater(updateNativeBackground)
 
-	Plasmoid.status: root.visible ? PlasmaCore.Types.RequiresAttentionStatus : PlasmaCore.Types.PassiveStatus
+    property int iconSize: {
+        switch (Plasmoid.configuration.appsIconSize) {
+        case 0:
+            return Kirigami.Units.iconSizes.smallMedium;
+        case 1:
+            return Kirigami.Units.iconSizes.medium;
+        case 2:
+            return Kirigami.Units.iconSizes.large;
+        case 3:
+            return Kirigami.Units.iconSizes.huge;
+        default:
+            return 64;
+        }
+    }
 
-	property int iconSize: { 
-		switch(Plasmoid.configuration.appsIconSize){
-			case 0: return Kirigami.Units.iconSizes.smallMedium;
-			case 1: return Kirigami.Units.iconSizes.medium;
-			case 2: return Kirigami.Units.iconSizes.large;
-			case 3: return Kirigami.Units.iconSizes.huge;
-			default: return 64
-		}
-	}
+    property int columns: Plasmoid.configuration.numberColumns
 
-	property int columns: Plasmoid.configuration.numberColumns
+    property int cellSizeHeight: iconSize + Kirigami.Units.gridUnit * 2 + (2 * Math.max(highlightItemSvg.margins.top + highlightItemSvg.margins.bottom, highlightItemSvg.margins.left + highlightItemSvg.margins.right))
+    property int cellSizeWidth: cellSizeHeight //+ Kirigami.Units.gridUnit
+    property int rows: Plasmoid.configuration.numberOfRows
 
-	property int cellSizeHeight: iconSize
-								+ Kirigami.Units.gridUnit * 2
-								+ (2 * Math.max(
-												highlightItemSvg.margins.top + highlightItemSvg.margins.bottom,
-												highlightItemSvg.margins.left + highlightItemSvg.margins.right
-												)
-								  )
-	property int cellSizeWidth: cellSizeHeight //+ Kirigami.Units.gridUnit
-	property int rows: plasmoid.configuration.numberOfRows
-	
-	onVisibleChanged: {
-		if (!visible) {
-			reset();
-		} else {
-			var pos = popupPosition(width, height);
-			x = pos.x;
-			y = pos.y;
-			requestActivate();
-		}
-	}
+    onVisibleChanged: {
+        if (visible) {
+            activatedOnce = false;
+            closing = false;
+            updatePosition();
+            motion.prepare();
+            motion.open();
+            Qt.callLater(updateNativeBackground);
+            requestActivate();
+        } else {
+            motion.prepare();
+            closing = false;
+            reset();
+        }
+    }
+    onActiveChanged: {
+        if (active)
+            activatedOnce = true;
+        else
+            Qt.callLater(maybeDismiss);
+    }
+    onWidthChanged: updatePosition()
+    onHeightChanged: updatePosition()
 
-	onHeightChanged: {
-		var pos = popupPosition(width, height);
-		x = pos.x;
-		y = pos.y;
-	}
+    function updatePosition() {
+        if (!launcherButton)
+            return;
+        var pos = popupPosition(width, height);
+        x = pos.x;
+        y = pos.y;
+        // The reference expands around the panel center, including near the Dock.
+        anchorX = 0.5;
+        anchorY = 0.5;
+        travel = 0;
+    }
+    function open() {
+        if (visible) {
+            closing = false;
+            motion.open();
+            requestActivate();
+            return;
+        }
+        // Latch the backend for this entire show/hide cycle, including reversal.
+        if (!closing) {
+            backendForSession = Plasmoid.configuration.animationBackend;
+            compositorForSession = backendForSession === 0 && kwinEffectAvailable;
+        }
+        closing = false;
+        updatePosition();
+        visible = true;
+        probeEffect();
+    }
+    function toggle() {
+        closeWithLaunchAnimation();
+    }
+    function toggleFromButton() {
+        if (!visible || closing)
+            open();
+        else
+            closeWithLaunchAnimation();
+    }
+    function closeWithLaunchAnimation() {
+        if (!visible || closing)
+            return;
+        closing = true;
+        motion.close();
+    }
+    function maybeDismiss() {
+        if (!active && visible && activatedOnce && !closing && openContextMenus === 0)
+            closeWithLaunchAnimation();
+    }
+    function contextMenuOpened() {
+        openContextMenus++;
+    }
+    function contextMenuClosed() {
+        openContextMenus = Math.max(0, openContextMenus - 1);
+        Qt.callLater(maybeDismiss);
+    }
+    function updateNativeBackground() {
+        var kids = contentItem ? contentItem.children : [];
+        for (var i = 0; i < kids.length; ++i) {
+            if (kids[i] && kids[i] !== fs) {
+                // Dialog exposes its native FrameSvg through this wrapper. Keep
+                // its mask and our material on the same SVG, including corners.
+                var frames = kids[i].children;
+                for (var j = 0; frames && j < frames.length; ++j) {
+                    if (frames[j].imagePath !== undefined && nativeGlassFrame !== frames[j]) {
+                        nativeGlassFrame = frames[j];
+                        nativeGlassFrame.imagePathChanged.connect(syncGlassPath);
+                        syncGlassPath();
+                        // Recompute the native blur mask after replacing
+                        // the SVG. The path hook above also handles theme resets.
+                        root.backgroundHints = PlasmaCore.Types.NoBackground;
+                        root.backgroundHints = Qt.binding(() => root.blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground);
+                    }
+                }
+                kids[i].visible = compositorForSession;
+            }
+        }
+    }
+    function syncGlassPath() {
+        if (nativeGlassFrame && blurEnabled && nativeGlassFrame.imagePath !== nativeGlassPath)
+            nativeGlassFrame.imagePath = nativeGlassPath;
+    }
+    function reset() {
+        main.reset();
+    }
+    function probeEffect() {
+        if (Plasmoid.configuration.animationBackend === 0 && !effectProbe.pending) {
+            effectProbe.pending = true;
+            effectProbe.connectSource(effectProbe.command);
+        }
+    }
+    property QtObject effectProbeObject: P5Support.DataSource {
+        id: effectProbe
+        engine: "executable"
+        property bool pending: false
+        readonly property string command: "timeout 2 sh -c 'for client in qdbus6 qdbus-qt6 qdbus; do if command -v \"$client\" >/dev/null 2>&1; then \"$client\" org.kde.KWin /Effects org.kde.kwin.Effects.isEffectLoaded tahoelauncher-motion; exit; fi; done; printf false'"
+        onNewData: (sourceName, data) => {
+            root.kwinEffectAvailable = data["exit code"] === 0 && /^(true|1)$/.test(String(data["stdout"]).trim());
+            disconnectSource(sourceName);
+            pending = false;
+        }
+    }
+    property Item motionController: LauncherMotion {
+        id: motion
+        animationsEnabled: root.backendForSession !== 2
+        durationFactor: root.durationFactor
+        onClosed: {
+            if (root.closing)
+                root.visible = false;
+        }
+    }
 
-	onWidthChanged: {
-		var pos = popupPosition(width, height);
-		x = pos.x;
-		y = pos.y;
-	}
-
-	function toggle() {
-		root.visible = false;
-	}
-
-	function reset() {
-		main.reset()
-	}
-
-	function popupPosition(width, height) {
-		var screenAvail = Plasmoid.availableScreenRect;
-		var screen/*Geom*/ = kicker.screenGeometry;
-		//QtBug - QTBUG-64115
-		/*var screen = Qt.rect(screenAvail.x + screenGeom.x,
+    function popupPosition(width, height) {
+        // Temporary animation room must not move the visible panel or enlarge
+        // the native blur mask at rest.
+        width -= motionPadding * 2;
+        height -= motionPadding * 2;
+        var screenAvail = Plasmoid.availableScreenRect;
+        var screen = /*Geom*/ kicker.screenGeometry;
+        //QtBug - QTBUG-64115
+        /*var screen = Qt.rect(screenAvail.x + screenGeom.x,
 				screenAvail.y + screenGeom.y,
 				screenAvail.width,
 				screenAvail.height);*/
 
-		var offset = 0
+        var offset = 0;
+        if (Plasmoid.configuration.offsetX > 0 && Plasmoid.configuration.floating) {
+            offset = Plasmoid.configuration.offsetX;
+        } else {
+            offset = Plasmoid.configuration.floating ? launcherButton.height * 0.35 : 0;
+        }
+        // Fall back to bottom-left of screen area when the applet is on the desktop or floating.
+        var x = offset;
+        var y = screen.height - height - offset;
+        var horizMidPoint = screen.x + (screen.width / 2);
+        var vertMidPoint = screen.y + (screen.height / 2);
+        var appletTopLeft = launcherButton.mapToGlobal(0, 0);
+        var appletBottomLeft = launcherButton.mapToGlobal(0, launcherButton.height);
+        if (Plasmoid.configuration.launcherPosition != 0) {
+            x = horizMidPoint - width / 2;
+        } else {
+            x = (appletTopLeft.x < horizMidPoint) ? screen.x : (screen.x + screen.width) - width;
+            if (Plasmoid.configuration.floating) {
+                if (appletTopLeft.x < horizMidPoint) {
+                    x += offset;
+                } else if (appletTopLeft.x + width > horizMidPoint) {
+                    x -= offset;
+                }
+            }
+        }
+        if (Plasmoid.configuration.launcherPosition != 2) {
+            if (Plasmoid.location == PlasmaCore.Types.TopEdge) {
+                if (Plasmoid.configuration.floating) {
+                    /*this is floatingAvatar.width*/
+                    if (Plasmoid.configuration.offsetY > 0) {
+                        offset = (125 * 1) / 2 + Plasmoid.configuration.offsetY;
+                    } else {
+                        offset = (125 * 1) / 2 + launcherButton.height * 0.125;
+                    }
+                }
+                y = screen.y + launcherButton.height + panelSvg.margins.bottom + offset;
+            } else {
+                if (Plasmoid.configuration.offsetY > 0) {
+                    offset = Plasmoid.configuration.offsetY;
+                }
+                y = screen.y + screen.height - launcherButton.height - height - panelSvg.margins.top - offset * 2.5;
+            }
+        } else {
+            y = vertMidPoint - height / 2;
+        }
+        return Qt.point(x - motionPadding, y - motionPadding);
+    }
 
-		if (Plasmoid.configuration.offsetX > 0 && Plasmoid.configuration.floating) {
-			offset = Plasmoid.configuration.offsetX
-		} else {
-			offset = plasmoid.configuration.floating ? parent.height * 0.35 : 0
-		}
-		// Fall back to bottom-left of screen area when the applet is on the desktop or floating.
-		var x = offset;
-		var y = screen.height - height - offset;
-		var horizMidPoint = screen.x + (screen.width / 2);
-		var vertMidPoint = screen.y + (screen.height / 2);
-		var appletTopLeft = parent.mapToGlobal(0, 0);
-		var appletBottomLeft = parent.mapToGlobal(0, parent.height);
+    mainItem: FocusScope {
+        id: fs
+        focus: true
+        width: (root.cellSizeWidth * Plasmoid.configuration.numberColumns) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2) + root.motionPadding * 2
+        // Searchbar.height + separator.height  + categories switcher.height
+        height: 40 + 2 + 40 + (root.cellSizeHeight * rows) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2) + root.motionPadding * 2
 
-		if (Plasmoid.configuration.launcherPosition != 0){
-			x = horizMidPoint - width / 2;
-		} else {
-			x = (appletTopLeft.x < horizMidPoint) ? screen.x : (screen.x + screen.width) - width;
-			if (Plasmoid.configuration.floating) {
-				if (appletTopLeft.x < horizMidPoint) {
-					x += offset
-				} else if (appletTopLeft.x + width > horizMidPoint){
-					x -= offset
-				}
-			}
-		}
+        // We want the MainView to have an uniform margin through different plasma themes
+        property real innerPadding: 15
 
-		if (Plasmoid.configuration.launcherPosition != 2){
-			if (Plasmoid.location == PlasmaCore.Types.TopEdge) {
-				if (Plasmoid.configuration.floating) {
-											/*this is floatingAvatar.width*/
-					if (Plasmoid.configuration.offsetY > 0) {
-						offset = (125 * 1) / 2 + Plasmoid.configuration.offsetY
-					} else {
-						offset = (125 * 1) / 2 + parent.height * 0.125
-					}
-				}
-				y = screen.y + parent.height + panelSvg.margins.bottom + offset;
-			} else {
-				if (Plasmoid.configuration.offsetY > 0) {
-					offset = Plasmoid.configuration.offsetY
-				}
-				y = screen.y + screen.height - parent.height - height - panelSvg.margins.top - offset * 2.5;
-			}
-		} else {
-			y = vertMidPoint - height / 2
-		}
+        // Whole panel (theme background, content). Animated as one unit.
+        Item {
+            id: panel
+            objectName: "motionPanel"
+            x: root.motionPadding
+            y: root.motionPadding
+            width: parent.width - root.motionPadding * 2
+            height: parent.height - root.motionPadding * 2
+            enabled: !root.closing
+            opacity: root.compositorForSession ? 1 : motion.surfaceOpacity
+            transform: Scale {
+                origin.x: panel.width * root.anchorX
+                origin.y: panel.height * root.anchorY
+                xScale: root.compositorForSession ? 1 : motion.surfaceScale
+                yScale: xScale
+            }
 
-		return Qt.point(x, y);
-	}
+            // Theme background. KWin blurs whatever is behind the window, so this
+            // only has to provide the glass surface itself.
+            KSvg.FrameSvgItem {
+                id: dialogBackground
+                visible: !root.compositorForSession
+                anchors.fill: parent
+                imagePath: root.glassPath
+            }
 
-	FocusScope {
-		id: fs
-		focus: true
-		width:  (root.cellSizeWidth * Plasmoid.configuration.numberColumns)+ innerPadding*2//Kirigami.Units.gridUnit*2
-		// Searchbar.height + separator.height  + categories switcher.height 
-		height: 40 + 2 + 40 + (root.cellSizeHeight *rows) + innerPadding//550 * 1
-		
-		
-		// We want the MainView to have an uniform margin through different plasma themes
-		property real innerPadding: 15 
+            MainView {
+                id: main
+                readonly property real contentPadding: fs.innerPadding + (root.compositorForSession ? 0 : root.shadowPadding)
+                width: parent.width - contentPadding * 2
+                height: parent.height - contentPadding * 2
+                x: contentPadding
+                y: contentPadding
+            }
+        }
 
-		Item {
-			id: mainItem
-			x: - dialogSvg.margins.left
-			y: - dialogSvg.margins.top
-			width: parent.width + dialogSvg.margins.left + dialogSvg.margins.right
-			height: parent.height + dialogSvg.margins.top + dialogSvg.margins.bottom
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_Escape) {
+                root.closeWithLaunchAnimation();
+                event.accepted = true;
+            }
+        }
+    }
 
-			MainView {
-				id: main
-				width:  mainItem.width - (fs.innerPadding)
-				height: mainItem.height - (fs.innerPadding*2)
-				x: fs.innerPadding
-				y: fs.innerPadding
-			}
-		}
+    function refreshModel() {
+        main.reload();
+    }
 
-		Keys.onPressed: {
-			if (event.key == Qt.Key_Escape) {
-				root.visible = false;
-			}
-		}
-	}
-
-	function refreshModel() {
-		main.reload()
-	}
-
-	Component.onCompleted: {
-		kicker.reset.connect(reset);
-		rootModel.refresh();
-	}
+    Component.onCompleted: {
+        kicker.reset.connect(reset);
+        rootModel.refresh();
+        probeEffect();
+        Qt.callLater(updateNativeBackground);
+    }
 }

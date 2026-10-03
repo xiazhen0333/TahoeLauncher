@@ -13,6 +13,8 @@ GridView {
 
     focus: true
     clip: true
+    reuseItems: true
+    cacheBuffer: height / 2
     currentIndex: count > 0 ? 0 : -1
     interactive: height < contentHeight
     boundsBehavior: Flickable.StopAtBounds
@@ -69,15 +71,6 @@ GridView {
         }
     }
 
-    Connections {
-        target: root
-        function onVisibleChanged() {
-            if (!root.visible) {
-                grid.currentIndex = 0
-                grid.positionViewAtBeginning()
-            }
-        }
-    }
 
     // Used to block hover events temporarily after using keyboard navigation.
     // If you have one hand on the touch pad or mouse and another hand on the keyboard,
@@ -95,7 +88,7 @@ GridView {
     }
 
     function focusCurrentItem(event, focusReason) {
-        currentItem.forceActiveFocus(focusReason)
+        if (currentItem) currentItem.forceActiveFocus(focusReason)
         event.accepted = true
     }
 
@@ -116,7 +109,7 @@ GridView {
         // at bottom of a given column, not necessarily in the last row
         let atBottom = currentIndex >= count - columns
         // Implements the keyboard navigation described in https://www.w3.org/TR/wai-aria-practices-1.2/#grid
-        if (count > 1) {
+        if (count > 0) {
             switch (event.key) {
                 case Qt.Key_Left: if (!atLeft && !searchBar.textField.activeFocus) {
                     moveCurrentIndexLeft()

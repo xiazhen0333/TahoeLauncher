@@ -16,12 +16,12 @@ ScrollView {
         spacing: 7
         orientation: ListView.Horizontal
         showScrollbar: false
-        property var contentHeight: 0
+        property real pillHeight: 0
 
-        anchors.topMargin: (parent.height - contentHeight ) /2			
+        anchors.topMargin: (parent.height - pillHeight ) /2
         anchors.fill: parent
         anchors.centerIn: parent
-        
+
         delegate: CategoryPill {
             id: del
             required property var model
@@ -32,11 +32,11 @@ ScrollView {
             onClicked: categorySwitcher.currentIndex = index
 
             Component.onCompleted: {
-                categorySwitcher.contentHeight = del.height
+                categorySwitcher.pillHeight = del.height
             }
         }
 
-        onCurrentIndexChanged: categorySwitched(categorySwitcher.currentItem.model.modelIndex)
+        onCurrentIndexChanged: { if (currentItem) categorySwitched(currentItem.model.modelIndex) }
     }
 
     MouseArea {

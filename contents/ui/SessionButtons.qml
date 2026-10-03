@@ -6,6 +6,7 @@ import org.kde.plasma.private.kicker as Kicker
 import org.kde.kitemmodels as KItemModels
 
 Item {
+    property bool countedMenuOpen: false
 
     width: button.width
     height: button.height
@@ -88,6 +89,12 @@ Item {
         visualParent: button
         placement: PlasmaExtras.Menu.BottomPosedLeftAlignedPopup
         onStatusChanged: {
+            var opened = contextMenu.status !== PlasmaExtras.Menu.Closed;
+            if (opened !== countedMenuOpen) {
+                countedMenuOpen = opened;
+                if (opened) root.contextMenuOpened();
+                else root.contextMenuClosed();
+            }
             if ( contextMenu.status === PlasmaExtras.Menu.Closed && Qt.application.layoutDirection == Qt.LeftToRight) {
                 nextItemInFocusChain(false).forceActiveFocus(Qt.BacktabFocusReason)
             }

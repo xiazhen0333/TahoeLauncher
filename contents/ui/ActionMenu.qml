@@ -13,6 +13,8 @@ Item {
     id: root
 
     property QtObject menu
+    property var launcherWindow: null
+    property bool countedOpen: false
     property Item visualParent
     property variant actionList
     property bool opened: menu ? (menu.status !== PlasmaExtras.Menu.Closed) : false
@@ -23,9 +25,18 @@ Item {
     onActionListChanged: refreshMenu();
 
     onOpenedChanged: {
+        if (launcherWindow && opened !== countedOpen) {
+            countedOpen = opened;
+            if (opened) launcherWindow.contextMenuOpened();
+            else launcherWindow.contextMenuClosed();
+        }
         if (!opened) {
             closed();
         }
+    }
+
+    Component.onDestruction: {
+        if (launcherWindow && countedOpen) launcherWindow.contextMenuClosed();
     }
 
     function open(x, y) {

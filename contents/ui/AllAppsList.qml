@@ -52,6 +52,11 @@ ColumnLayout {
 
 	function reset(){
 		currentStateIndex = 0
+        if (viewItem && typeof viewItem.reset === "function") viewItem.reset()
+        else if (viewItem) {
+            viewItem.currentIndex = viewItem.count > 0 ? 0 : -1
+            viewItem.positionViewAtBeginning()
+        }
 	}
 
 	Connections {
@@ -70,7 +75,7 @@ ColumnLayout {
 	AppCategorySwitcher {
 		id: categorySwitcher
 
-		Layout.preferredWidth: parent.width-fs.innerPadding
+		Layout.fillWidth: true
     	Layout.preferredHeight: visible ? 40 : 0
 		model: appsCategoriesList
 		visible: !showItemsCategorized && main.showAllApps
@@ -90,9 +95,6 @@ ColumnLayout {
 		active: true
 	}
 
-	onPreferredAppsViewComponentChanged: {
-		appViewLoader.sourceComponent = preferredAppsViewComponent;
-	}
 
 	Component {
 		id: applicationsListViewComponent
@@ -113,7 +115,6 @@ ColumnLayout {
 		AppGridView {
 			id: grid
 			anchors.fill: parent
-			anchors.leftMargin: fs.innerPadding / 2
 			
 			model: main.showAllApps ? currentModel : globalFavorites
 			canMoveWithKeyboard: true
