@@ -21,7 +21,7 @@ class TahoeLauncherMotion {
         const x = Number(match[2]), y = Number(match[3]), travel = Number(match[4]);
         if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1 || Math.abs(travel) > 10) return null;
         const frame = match[1] === "4", scale = Number(match[6]), opacity = Number(match[7]);
-        if (frame && (!match[6] || !match[7] || !Number.isFinite(scale) || scale < 0.8 || scale > 1.1 || !Number.isFinite(opacity) || opacity < 0 || opacity > 1)) return null;
+        if (frame && (!match[6] || !match[7] || !Number.isFinite(scale) || scale < 0.8 || scale > 1.2 || !Number.isFinite(opacity) || opacity < 0 || opacity > 1)) return null;
         return { x: x, y: y, travel: travel, phase: match[5], frame: frame, scale: scale, opacity: opacity };
     }
     watch(window) {
@@ -79,8 +79,8 @@ class TahoeLauncherMotion {
         }
     }
     updateFrame(window, marker) {
-        // The final neutral sample can arrive before a caption-only settled update.
-        if (marker.phase === "settled" || (marker.phase === "open" && marker.scale > 0.9997 && marker.opacity > 0.99998) || effects.hasActiveFullScreenEffect) {
+        // The fitted spring crosses 1 during its rebound. Only settled ends it.
+        if (marker.phase === "settled" || effects.hasActiveFullScreenEffect) {
             this.release(window);
             return;
         }

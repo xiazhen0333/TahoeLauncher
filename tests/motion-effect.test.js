@@ -89,15 +89,32 @@ function harness(damageSynchronously = false) {
     w.caption = 'TahoeLauncher Motion v4|0.25,1,8|open|0.959,0.75'; w.windowDamaged.emit(w);
     assert.deepEqual([...h.running.keys()], ids, 'rapid reversal must keep the same mapped window channels');
     w.caption = 'TahoeLauncher Motion v4|0.25,1,8|open|1,1'; w.windowDamaged.emit(w);
-    assert.equal(h.running.size, 0);
-    assert.equal(h.grabs.size, 0);
+    assert.equal(h.running.size, 3, 'crossing neutral scale must keep the rebound alive');
     w.caption = 'TahoeLauncher Motion v4|0.25,1,8|settled|1,1'; w.windowDamaged.emit(w);
     assert.equal(h.running.size, 0, 'settled repaint must not recreate transforms');
+    assert.equal(h.grabs.size, 0);
     w.caption = 'TahoeLauncher Motion v4|0.25,1,8|close|0.91,0'; w.windowDamaged.emit(w);
     w.visible = false; w.windowHiddenChanged.emit(w); h.effects.windowClosed.emit(w);
     assert.equal(h.running.size, 0);
     assert.equal(h.context.motion.phases.size, 0);
     assert.equal(h.context.motion.marker(h.window('TahoeLauncher Motion v4|0.5,0.5,0|open|1.5,0.5')), null);
+}
+{
+    const h = harness(true), w = h.window('TahoeLauncher Motion v4|0.5,0.5,0|open|1.14,0');
+    h.effects.windowAdded.emit(w);
+    const ids = [...h.running.keys()];
+    assert.equal(ids.length, 3, 'the enlarged opening sample must be accepted');
+    for (const scale of [1.08, 1.002, 1, 0.994, 0.999]) {
+        w.caption = `TahoeLauncher Motion v4|0.5,0.5,0|open|${scale},1`;
+        w.windowDamaged.emit(w);
+        assert.deepEqual([...h.running.keys()], ids, 'rebound cannot release the native transform');
+        assert.equal(h.running.get(ids[0]).to, scale);
+        assert.ok(h.running.get(ids[2]).to.value1 === 0);
+        assert.ok(h.running.get(ids[2]).to.value2 === 0);
+    }
+    w.caption = 'TahoeLauncher Motion v4|0.5,0.5,0|settled|1,1';
+    w.windowDamaged.emit(w);
+    assert.equal(h.running.size, 0);
 }
 {
     const h = harness(), w = h.window('TahoeLauncher Motion v3|0.5,0.5,0|open');

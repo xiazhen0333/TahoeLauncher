@@ -1,27 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import QtQuick
 
-// A critically damped spring preserves position and velocity on retargeting.
+// Fitted to the supplied 60 fps recording; see docs/macos-motion.md.
 Item {
     id: motion
     property bool requestedOpen: false
     property bool closeRequested: false
     property bool animationsEnabled: true
     property real durationFactor: 1
-    property real openingScale: 0.91
-    property real closingScale: 0.91
+    readonly property real openingScale: 1.14
+    readonly property real closingScale: 1.08
     property real surfaceScale: openingScale
     property real surfaceOpacity: 0
-    property real contentOpacity: 0
+    readonly property real contentBlur: 1 - surfaceOpacity
     property real scaleVelocity: 0
-    property real opacityVelocity: 0
-    property real contentVelocity: 0
-    property real revealDelay: 0
-    property real travel: 8
+    property real revealDelay: 0.03
+    property real fadeElapsed: 0
+    property real fadeFrom: 0
     property bool running: false
     property real elapsedFrames: 0
-    property string compositorFrame: "close|0.91000,0.00000"
-    readonly property real offsetY: travel * (1 - Math.min(1, Math.max(0, (surfaceScale - openingScale) / (1 - openingScale))))
+    property string compositorFrame: "close|1.14000,0.00000"
     readonly property bool settled: !running
     signal closed
 
@@ -31,19 +29,24 @@ Item {
         closeRequested = false;
         surfaceScale = openingScale;
         surfaceOpacity = 0;
-        contentOpacity = 0;
-        scaleVelocity = opacityVelocity = contentVelocity = 0;
-        revealDelay = 0.06 * durationFactor;
+        scaleVelocity = 0;
+        revealDelay = 0.03;
+        fadeElapsed = 0;
+        fadeFrom = 0;
         elapsedFrames = 0;
         publishFrame();
     }
     function open() {
+        if (requestedOpen)
+            return;
         requestedOpen = true;
         closeRequested = false;
         start();
         publishFrame();
     }
     function close() {
+        if (closeRequested)
+            return;
         requestedOpen = false;
         closeRequested = true;
         revealDelay = 0;
@@ -51,10 +54,13 @@ Item {
         publishFrame();
     }
     function start() {
+        fadeFrom = surfaceOpacity;
+        fadeElapsed = -revealDelay;
+        revealDelay = 0;
         if (!animationsEnabled || durationFactor <= 0) {
             surfaceScale = requestedOpen ? 1 : closingScale;
-            surfaceOpacity = contentOpacity = requestedOpen ? 1 : 0;
-            scaleVelocity = opacityVelocity = contentVelocity = 0;
+            surfaceOpacity = requestedOpen ? 1 : 0;
+            scaleVelocity = 0;
             finish();
         } else {
             if (!running)
@@ -64,37 +70,48 @@ Item {
     }
     function publishFrame() {
         var phase = requestedOpen ? (running ? "open" : "settled") : "close";
-        compositorFrame = phase + "|" + surfaceScale.toFixed(5) + "," + Math.max(0, Math.min(1, surfaceOpacity)).toFixed(5);
+        compositorFrame = phase + "|" + surfaceScale.toFixed(5) + "," + surfaceOpacity.toFixed(5);
     }
-    function spring(value, velocity, target, frequency, seconds) {
+    function spring(value, velocity, target, frequency, damping, seconds) {
         var displacement = value - target;
-        var coefficient = velocity + frequency * displacement;
-        var decay = Math.exp(-frequency * seconds);
-        return [(displacement + coefficient * seconds) * decay + target,
-                (velocity - frequency * coefficient * seconds) * decay];
+        var decay = Math.exp(-damping * frequency * seconds);
+        if (damping === 1) {
+            var coefficient = velocity + frequency * displacement;
+            return [(displacement + coefficient * seconds) * decay + target,
+                    (velocity - frequency * coefficient * seconds) * decay];
+        }
+        var damped = frequency * Math.sqrt(1 - damping * damping);
+        var sine = Math.sin(damped * seconds);
+        var cosine = Math.cos(damped * seconds);
+        var c = (velocity + damping * frequency * displacement) / damped;
+        return [target + decay * (displacement * cosine + c * sine),
+                decay * (velocity * cosine - (damping * frequency * c + damped * displacement) * sine)];
     }
     function advance(seconds) {
         if (!running || seconds <= 0)
             return;
+        if (!animationsEnabled || durationFactor <= 0) {
+            start();
+            publishFrame();
+            return;
+        }
         var targetScale = requestedOpen ? 1 : closingScale;
-        var targetOpacity = requestedOpen ? 1 : 0;
-        var scale = spring(surfaceScale, scaleVelocity, targetScale, (requestedOpen ? 22 : 28) / durationFactor, seconds);
-        var opacity = spring(surfaceOpacity, opacityVelocity, targetOpacity, (requestedOpen ? 40 : 35) / durationFactor, seconds);
-        var contentSeconds = Math.max(0, seconds - revealDelay);
-        revealDelay = Math.max(0, revealDelay - seconds);
-        var content = spring(contentOpacity, contentVelocity, targetOpacity, (requestedOpen ? 28 : 40) / durationFactor, contentSeconds);
+        var scale = spring(surfaceScale, scaleVelocity, targetScale,
+                           (requestedOpen ? 23 : 20) / durationFactor,
+                           requestedOpen ? 0.7 : 1, seconds);
         surfaceScale = scale[0];
         scaleVelocity = scale[1];
-        surfaceOpacity = opacity[0];
-        opacityVelocity = opacity[1];
-        contentOpacity = content[0];
-        contentVelocity = content[1];
-        if (Math.abs(surfaceScale - targetScale) < 0.0003 && Math.abs(scaleVelocity) < 0.005
-                && Math.abs(surfaceOpacity - targetOpacity) < 0.002 && Math.abs(opacityVelocity) < 0.03
-                && Math.abs(contentOpacity - targetOpacity) < 0.002 && Math.abs(contentVelocity) < 0.03) {
+        fadeElapsed += seconds / durationFactor;
+        var progress = Math.max(0, Math.min(1, fadeElapsed / (requestedOpen ? 0.1 : 0.092)));
+        var eased = requestedOpen ? 1 - (1 - progress) * (1 - progress) : progress;
+        surfaceOpacity = fadeFrom + ((requestedOpen ? 1 : 0) - fadeFrom) * eased;
+        // A fully transparent close can hide immediately; opening keeps its rebound.
+        if ((!requestedOpen && progress === 1)
+                || (requestedOpen && progress === 1
+                    && Math.abs(surfaceScale - 1) < 0.0005 && Math.abs(scaleVelocity) < 0.02)) {
             surfaceScale = targetScale;
-            surfaceOpacity = contentOpacity = targetOpacity;
-            scaleVelocity = opacityVelocity = contentVelocity = 0;
+            surfaceOpacity = requestedOpen ? 1 : 0;
+            scaleVelocity = 0;
             finish();
         }
         publishFrame();
@@ -111,8 +128,8 @@ Item {
         running: motion.running
         onTriggered: {
             var elapsed = elapsedTime;
-            // A cold window or a long frame must not skip the initial reveal.
-            motion.advance(Math.min(1 / 30, Math.max(0, elapsed - motion.elapsedFrames)));
+            // The analytic solution keeps wall-clock timing after a dropped frame.
+            motion.advance(Math.max(0, elapsed - motion.elapsedFrames));
             motion.elapsedFrames = elapsed;
         }
     }

@@ -33,7 +33,7 @@ motion = create(root / 'contents/ui/LauncherMotion.qml')
 closed = QSignalSpy(motion, motion.metaObject().method(motion.metaObject().indexOfSignal('closed()')))
 call(motion, 'prepare'); call(motion, 'open'); QTest.qWait(70)
 before = motion.property('surfaceScale')
-assert 0.91 < before < 1, before
+assert 1 < before < 1.14, before
 call(motion, 'close')
 assert abs(motion.property('surfaceScale') - before) < 0.005, 'closing jumped to a fixed source'
 QTest.qWait(50)
@@ -54,13 +54,14 @@ assert motion.property('surfaceOpacity') == 0
 physical = create(root / 'contents/ui/LauncherMotion.qml')
 physical.findChild(QObject, 'motionFrames').setProperty('running', False)
 call(physical, 'prepare'); call(physical, 'open'); call(physical, 'advance', 0.04)
-assert physical.property('contentOpacity') == 0, 'content must follow the initial panel reveal'
+assert 0 < physical.property('surfaceOpacity') < 0.3, 'cold opening has a short surface reveal delay'
+assert physical.property('contentBlur') == 1 - physical.property('surfaceOpacity')
 assert physical.property('surfaceOpacity') > 0.1
 position, velocity = physical.property('surfaceScale'), physical.property('scaleVelocity')
 call(physical, 'close')
 assert physical.property('surfaceScale') == position and physical.property('scaleVelocity') == velocity
 call(physical, 'advance', 0.001)
-assert physical.property('scaleVelocity') > 0, 'reversal must decelerate existing motion before changing direction'
+assert physical.property('scaleVelocity') < 0, 'reversal must decelerate existing motion before changing direction'
 call(physical, 'advance', 0.07)
 position, velocity = physical.property('surfaceScale'), physical.property('scaleVelocity')
 call(physical, 'open')
@@ -69,8 +70,43 @@ samples = []
 for rate in (60, 144):
     call(physical, 'prepare'); call(physical, 'open')
     for _ in range(rate // 4): call(physical, 'advance', 1 / rate)
-    samples.append(tuple(physical.property(name) for name in ('surfaceScale', 'surfaceOpacity', 'contentOpacity')))
+    samples.append(tuple(physical.property(name) for name in ('surfaceScale', 'surfaceOpacity', 'contentBlur')))
 assert all(abs(a - b) < 0.00001 for a, b in zip(*samples)), samples
+# Independent measurements from the reference video, not generated from the model.
+import csv
+with (root / 'tests/fixtures/macos-motion.csv').open() as reference:
+    rows = list(csv.DictReader(reference))
+for phase in ('open', 'close'):
+    call(physical, 'prepare'); call(physical, 'open')
+    if phase == 'close':
+        call(physical, 'advance', 1); call(physical, 'close')
+    elapsed = 0
+    for row in (r for r in rows if r['phase'] == phase):
+        moment = float(row['elapsed_ms']) / 1000
+        call(physical, 'advance', moment - elapsed)
+        elapsed = moment
+        assert abs(physical.property('surfaceScale') - float(row['scale'])) < 0.004, row
+        assert abs(physical.property('surfaceOpacity') - float(row['opacity'])) < 0.06, row
+# The rebound must survive the first crossing of scale 1.
+call(physical, 'prepare'); call(physical, 'open'); call(physical, 'advance', 0.18)
+assert 0.99 < physical.property('surfaceScale') < 1 and physical.property('running')
+call(physical, 'advance', 0.4)
+assert physical.property('settled') and physical.property('surfaceScale') == 1
+# Dropped frames and KDE's duration factor retain the same curve and wall time.
+for factor in (0.5, 1, 2):
+    physical.setProperty('durationFactor', factor)
+    call(physical, 'prepare'); call(physical, 'open'); call(physical, 'advance', 0.25 * factor)
+    assert abs(physical.property('surfaceScale') - samples[0][0]) < 0.00001
+    call(physical, 'advance', factor); call(physical, 'close')
+    call(physical, 'advance', 0.091 * factor)
+    assert physical.property('running'), 'close hid before its fade completed'
+    call(physical, 'advance', 0.002 * factor)
+    assert physical.property('settled') and physical.property('surfaceOpacity') == 0
+physical.setProperty('durationFactor', 1)
+call(physical, 'prepare'); call(physical, 'open'); call(physical, 'advance', 0.05)
+physical.setProperty('durationFactor', 0)
+call(physical, 'advance', 0.01)
+assert physical.property('settled') and physical.property('surfaceScale') == 1
 with tempfile.TemporaryDirectory() as directory:
     tmp = pathlib.Path(directory)
     for name in ('AppsCategorized.qml', 'Scrollbar.qml', 'AppGridView.qml', 'AllAppsList.qml'):
@@ -263,18 +299,31 @@ Window {
     popupHarness = create(tmp / 'PopupHarness.qml'); QTest.qWait(30)
     popup = popupHarness.findChild(QObject, 'popupWindow')
     if native_dialog:
+        call(popup, 'open'); QTest.qWait(30)
+        assert popup.property('motionPadding') > 0
+        call(popup, 'open'); QTest.qWait(550)
+        assert popup.property('motionPadding') == 0
+        assert popup.property('nativeGlassFrame').property('width') == popup.width()
+        call(popup, 'closeWithLaunchAnimation'); QTest.qWait(150)
         call(popupHarness, 'setBackend', 0)
         call(popup, 'probeEffect'); QTest.qWait(30)
-        call(popup, 'open'); QTest.qWait(550)
+        call(popup, 'open')
         frame = popup.property('nativeGlassFrame')
         assert frame is not None, 'native DialogBackground FrameSvg was not found'
         from PySide6.QtCore import QPoint
-        mask = frame.property('mask')
-        assert frame.property('imagePath').endswith('/materials/glass-panel.svg')
-        assert not mask.contains(QPoint(1, 1)), 'transparent corners must not receive blur'
-        assert mask.contains(QPoint(popup.width() // 2, popup.height() // 2))
+        def check_corners():
+            mask = frame.property('mask')
+            assert frame.property('imagePath').endswith('/materials/glass-panel.svg')
+            for x in (5, int(frame.property('width')) - 6):
+                for y in (5, int(frame.property('height')) - 6):
+                    assert not mask.contains(QPoint(x, y)), 'rounded corners must not receive blur'
+            assert mask.contains(QPoint(popup.width() // 2, popup.height() // 2))
+        for _ in range(35):
+            QTest.qWait(16)
+            check_corners()
         call(popup, 'closeWithLaunchAnimation'); QTest.qWait(60)
         assert popup.property('visible'), 'native window was hidden before close completed'
+        check_corners()
         call(popup, 'open'); QTest.qWait(550)
         assert popup.property('visible') and '|settled|' in popup.property('title')
         call(popup, 'closeWithLaunchAnimation'); QTest.qWait(550)
@@ -283,12 +332,21 @@ Window {
         # Native KDE reports unsupported platform/shadow capabilities offscreen.
         expected = ('QObject::installEventFilter(): Cannot filter events for objects in a different thread.',
                     'Could not find any platform plugin', 'Member visible of the object PlasmaQuick::Dialog overrides',
-                    "Couldn't create KWindowShadow for", 'This plugin does not support raise()')
+                    "Couldn't create KWindowShadow for", 'This plugin does not support raise()',
+                    'This plugin does not support setting window masks')
         unexpected = [text for text in errors if not text.startswith(expected)]
         assert not unexpected, '\n'.join(unexpected)
         print('PASS: native Plasma Dialog glass mask, transparent corners, mapped reversal and deferred hide')
         raise SystemExit(0)
-    call(popup, 'open'); QTest.qWait(300)
+    call(popup, 'open')
+    panel = popup.findChild(QObject, 'motionPanel')
+    padding = popup.property('motionPadding')
+    for axis in ('width', 'height'):
+        assert panel.property(axis) * 0.14 / 2 <= padding, 'enlarged surface clips at the window edge'
+    assert popup.property('anchorX') == 0.5 and popup.property('anchorY') == 0.5
+    assert popup.property('travel') == 0
+    QTest.qWait(500)
+    assert popup.property('motionPadding') == 0, 'transparent animation room must not expand the resting blur mask'
     assert popup.property('visible') and not popup.property('compositorForSession')
     call(popup, 'contextMenuOpened')
     popup.setProperty('active', False); QTest.qWait(220)

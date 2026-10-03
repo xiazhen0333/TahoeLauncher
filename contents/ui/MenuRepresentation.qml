@@ -47,12 +47,15 @@ PlasmaCore.Dialog {
     property int openContextMenus: 0
     property bool kwinEffectAvailable: false
     property bool compositorForSession: false
-    readonly property real animationContentOpacity: Math.max(0, Math.min(1, motion.contentOpacity))
     property int backendForSession: 1
     property real anchorX: 0.5
     property real anchorY: 0.5
     property int travel: 0
     readonly property int shadowPadding: 24
+    // Keep the surface and its shadow inside the QML window when enlarged.
+    readonly property int motionPadding: compositorForSession || !motion.running ? 0 : Math.ceil(Math.max(
+        cellSizeWidth * columns + 30 + shadowPadding * 2,
+        82 + cellSizeHeight * rows + 30 + shadowPadding * 2) * (motion.openingScale - 1) / 2)
     readonly property string glassPath: Qt.resolvedUrl("materials/glass.svg").toString().replace(/^file:\/\//, "")
     readonly property string nativeGlassPath: Qt.resolvedUrl("materials/glass-panel.svg").toString().replace(/^file:\/\//, "")
     property var nativeGlassFrame: null
@@ -115,16 +118,10 @@ PlasmaCore.Dialog {
         var pos = popupPosition(width, height);
         x = pos.x;
         y = pos.y;
-        if (Plasmoid.configuration.launcherPosition === 2) {
-            anchorX = 0.5;
-            anchorY = 0.5;
-            travel = 0;
-        } else {
-            var buttonCenter = launcherButton.mapToGlobal(launcherButton.width / 2, launcherButton.height / 2);
-            anchorX = Math.max(0, Math.min(1, (buttonCenter.x - x) / Math.max(1, width)));
-            anchorY = Plasmoid.location === PlasmaCore.Types.TopEdge ? 0 : 1;
-            travel = anchorY === 0 ? -8 : 8;
-        }
+        // The reference expands around the panel center, including near the Dock.
+        anchorX = 0.5;
+        anchorY = 0.5;
+        travel = 0;
     }
     function open() {
         if (visible) {
@@ -219,7 +216,6 @@ PlasmaCore.Dialog {
         id: motion
         animationsEnabled: root.backendForSession !== 2
         durationFactor: root.durationFactor
-        travel: root.travel
         onClosed: {
             if (root.closing)
                 root.visible = false;
@@ -227,6 +223,10 @@ PlasmaCore.Dialog {
     }
 
     function popupPosition(width, height) {
+        // Temporary animation room must not move the visible panel or enlarge
+        // the native blur mask at rest.
+        width -= motionPadding * 2;
+        height -= motionPadding * 2;
         var screenAvail = Plasmoid.availableScreenRect;
         var screen = /*Geom*/ kicker.screenGeometry;
         //QtBug - QTBUG-64115
@@ -280,15 +280,15 @@ PlasmaCore.Dialog {
         } else {
             y = vertMidPoint - height / 2;
         }
-        return Qt.point(x, y);
+        return Qt.point(x - motionPadding, y - motionPadding);
     }
 
     mainItem: FocusScope {
         id: fs
         focus: true
-        width: (root.cellSizeWidth * Plasmoid.configuration.numberColumns) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2)
+        width: (root.cellSizeWidth * Plasmoid.configuration.numberColumns) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2) + root.motionPadding * 2
         // Searchbar.height + separator.height  + categories switcher.height
-        height: 40 + 2 + 40 + (root.cellSizeHeight * rows) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2)
+        height: 40 + 2 + 40 + (root.cellSizeHeight * rows) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2) + root.motionPadding * 2
 
         // We want the MainView to have an uniform margin through different plasma themes
         property real innerPadding: 15
@@ -296,11 +296,13 @@ PlasmaCore.Dialog {
         // Whole panel (theme background, content). Animated as one unit.
         Item {
             id: panel
-            width: parent.width
-            height: parent.height
+            objectName: "motionPanel"
+            x: root.motionPadding
+            y: root.motionPadding
+            width: parent.width - root.motionPadding * 2
+            height: parent.height - root.motionPadding * 2
             enabled: !root.closing
             opacity: root.compositorForSession ? 1 : motion.surfaceOpacity
-            y: root.compositorForSession ? 0 : motion.offsetY
             transform: Scale {
                 origin.x: panel.width * root.anchorX
                 origin.y: panel.height * root.anchorY

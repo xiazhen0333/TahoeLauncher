@@ -28,6 +28,14 @@ import "js/colorType.js" as ColorType
 
 Item {
     id: main
+    // Blur all foreground content together; panel opacity already supplies the fade.
+    layer.enabled: root.visible && root.motionController.running && root.backendForSession !== 2 && GraphicsInfo.api !== GraphicsInfo.Software
+    layer.effect: MultiEffect {
+        blurEnabled: true
+        blurMax: 12
+        blur: root.motionController.contentBlur
+        autoPaddingEnabled: false
+    }
     property bool searching: (searchBar.textField.text != "")
 
     readonly property color textColor: Kirigami.Theme.textColor
@@ -79,15 +87,6 @@ Item {
         }
 
         Item {
-            opacity: root.animationContentOpacity
-            // Removing the layer at rest also commits the final compositor frame.
-            layer.enabled: root.visible && root.motionController.running && root.backendForSession !== 2 && GraphicsInfo.api !== GraphicsInfo.Software
-            layer.effect: MultiEffect {
-                blurEnabled: true
-                blurMax: 12
-                blur: 1 - root.animationContentOpacity
-                autoPaddingEnabled: false
-            }
             Layout.fillHeight: true
             Layout.fillWidth: true
             clip: true
