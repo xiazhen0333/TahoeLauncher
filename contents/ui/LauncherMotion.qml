@@ -7,6 +7,7 @@ Item {
     property bool requestedOpen: false
     property bool closeRequested: false
     property bool animationsEnabled: true
+    property bool frameReady: true
     property real durationFactor: 1
     readonly property real openingScale: 1.14
     readonly property real closingScale: 1.08
@@ -18,7 +19,7 @@ Item {
     property real fadeElapsed: 0
     property real fadeFrom: 0
     property bool running: false
-    property real elapsedFrames: 0
+    property real elapsedFrames: -1
     property string compositorFrame: "close|1.14000,0.00000"
     readonly property bool settled: !running
     signal closed
@@ -33,7 +34,7 @@ Item {
         revealDelay = 0.03;
         fadeElapsed = 0;
         fadeFrom = 0;
-        elapsedFrames = 0;
+        elapsedFrames = -1;
         publishFrame();
     }
     function open() {
@@ -64,7 +65,7 @@ Item {
             finish();
         } else {
             if (!running)
-                elapsedFrames = 0;
+                elapsedFrames = -1;
             running = true;
         }
     }
@@ -123,14 +124,20 @@ Item {
             closed();
         }
     }
+    function tick(elapsed) {
+        // Start the clock at the first rendered frame, not at window creation.
+        if (elapsedFrames >= 0) {
+            var seconds = Math.max(0, elapsed - elapsedFrames);
+            // Preserve the reveal when initial texture uploads delay a frame.
+            if (requestedOpen && surfaceOpacity < 1)
+                seconds = Math.min(1 / 30, seconds);
+            advance(seconds);
+        }
+        elapsedFrames = elapsed;
+    }
     FrameAnimation {
         objectName: "motionFrames"
-        running: motion.running
-        onTriggered: {
-            var elapsed = elapsedTime;
-            // The analytic solution keeps wall-clock timing after a dropped frame.
-            motion.advance(Math.max(0, elapsed - motion.elapsedFrames));
-            motion.elapsedFrames = elapsed;
-        }
+        running: motion.running && motion.frameReady
+        onTriggered: motion.tick(elapsedTime)
     }
 }
