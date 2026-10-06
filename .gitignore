@@ -1,0 +1,13 @@
+# Local tool settings
+/.agents/
+/.aws/
+/.claude/
+/.codex/
+
+# Build output and caches
+/build/
+/contents/ui/native/*.so
+__pycache__/
+*.py[cod]
+*.qmlc
+.DS_Store
