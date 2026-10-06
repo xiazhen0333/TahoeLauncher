@@ -29,6 +29,7 @@ import org.kde.plasma.plasmoid
 import org.kde.ksvg as KSvg
 import org.kde.kirigami as Kirigami
 import org.kde.plasma.plasma5support as P5Support
+import "native"
 
 PlasmaCore.Dialog {
     id: root
@@ -47,6 +48,7 @@ PlasmaCore.Dialog {
     property int openContextMenus: 0
     property bool kwinEffectAvailable: false
     property bool compositorForSession: false
+    property bool firstFrameReady: false
     property int backendForSession: 1
     property real anchorX: 0.5
     property real anchorY: 0.5
@@ -57,15 +59,18 @@ PlasmaCore.Dialog {
         cellSizeWidth * columns + 30 + shadowPadding * 2,
         82 + cellSizeHeight * rows + 30 + shadowPadding * 2) * (motion.openingScale - 1) / 2)
     readonly property string glassPath: Qt.resolvedUrl("materials/glass.svg").toString().replace(/^file:\/\//, "")
-    readonly property string nativeGlassPath: Qt.resolvedUrl("materials/glass-panel.svg").toString().replace(/^file:\/\//, "")
-    property var nativeGlassFrame: null
+    readonly property var glassFrame: dialogBackground
     readonly property real durationFactor: Math.max(0, Kirigami.Units.longDuration / 200)
-    readonly property bool blurEnabled: compositorForSession || (visible && !closing && motion.settled && motion.surfaceOpacity >= 0.999)
-    backgroundHints: blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground
+    readonly property bool blurEnabled: visible && (compositorForSession || (!closing && motion.settled && motion.surfaceOpacity >= 0.999))
+    // Render one SVG for both backends; it owns the surface, corners and shadow.
+    backgroundHints: PlasmaCore.Types.NoBackground
     title: compositorForSession ? "TahoeLauncher Motion v4|" + anchorX.toFixed(4) + "," + anchorY.toFixed(4) + "," + travel + "|" + motion.compositorFrame : "TahoeLauncher"
     // Publish the title command with a rendered frame while the window stays mapped.
     onTitleChanged: Qt.callLater(update)
-    onBackgroundHintsChanged: Qt.callLater(updateNativeBackground)
+    onFrameSwapped: {
+        if (visible)
+            firstFrameReady = true;
+    }
 
     property int iconSize: {
         switch (Plasmoid.configuration.appsIconSize) {
@@ -93,11 +98,13 @@ PlasmaCore.Dialog {
             activatedOnce = false;
             closing = false;
             updatePosition();
+            firstFrameReady = false;
             motion.prepare();
             motion.open();
-            Qt.callLater(updateNativeBackground);
+            update();
             requestActivate();
         } else {
+            firstFrameReady = false;
             motion.prepare();
             closing = false;
             reset();
@@ -166,32 +173,6 @@ PlasmaCore.Dialog {
         openContextMenus = Math.max(0, openContextMenus - 1);
         Qt.callLater(maybeDismiss);
     }
-    function updateNativeBackground() {
-        var kids = contentItem ? contentItem.children : [];
-        for (var i = 0; i < kids.length; ++i) {
-            if (kids[i] && kids[i] !== fs) {
-                // Dialog exposes its native FrameSvg through this wrapper. Keep
-                // its mask and our material on the same SVG, including corners.
-                var frames = kids[i].children;
-                for (var j = 0; frames && j < frames.length; ++j) {
-                    if (frames[j].imagePath !== undefined && nativeGlassFrame !== frames[j]) {
-                        nativeGlassFrame = frames[j];
-                        nativeGlassFrame.imagePathChanged.connect(syncGlassPath);
-                        syncGlassPath();
-                        // Recompute the native blur mask after replacing
-                        // the SVG. The path hook above also handles theme resets.
-                        root.backgroundHints = PlasmaCore.Types.NoBackground;
-                        root.backgroundHints = Qt.binding(() => root.blurEnabled ? PlasmaCore.Types.StandardBackground : PlasmaCore.Types.NoBackground);
-                    }
-                }
-                kids[i].visible = compositorForSession;
-            }
-        }
-    }
-    function syncGlassPath() {
-        if (nativeGlassFrame && blurEnabled && nativeGlassFrame.imagePath !== nativeGlassPath)
-            nativeGlassFrame.imagePath = nativeGlassPath;
-    }
     function reset() {
         main.reset();
     }
@@ -215,6 +196,7 @@ PlasmaCore.Dialog {
     property Item motionController: LauncherMotion {
         id: motion
         animationsEnabled: root.backendForSession !== 2
+        frameReady: root.firstFrameReady
         durationFactor: root.durationFactor
         onClosed: {
             if (root.closing)
@@ -286,14 +268,20 @@ PlasmaCore.Dialog {
     mainItem: FocusScope {
         id: fs
         focus: true
-        width: (root.cellSizeWidth * Plasmoid.configuration.numberColumns) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2) + root.motionPadding * 2
+        width: (root.cellSizeWidth * Plasmoid.configuration.numberColumns) + innerPadding * 2 + root.shadowPadding * 2 + root.motionPadding * 2
         // Searchbar.height + separator.height  + categories switcher.height
-        height: 40 + 2 + 40 + (root.cellSizeHeight * rows) + innerPadding * 2 + (root.compositorForSession ? 0 : root.shadowPadding * 2) + root.motionPadding * 2
+        height: 40 + 2 + 40 + (root.cellSizeHeight * rows) + innerPadding * 2 + root.shadowPadding * 2 + root.motionPadding * 2
 
         // We want the MainView to have an uniform margin through different plasma themes
         property real innerPadding: 15
 
-        // Whole panel (theme background, content). Animated as one unit.
+        GlassEffects {
+            objectName: "glassEffects"
+            maskItem: dialogBackground
+            blurEnabled: root.blurEnabled
+        }
+
+        // Surface, corners, shadow and content share the same frame.
         Item {
             id: panel
             objectName: "motionPanel"
@@ -310,18 +298,17 @@ PlasmaCore.Dialog {
                 yScale: xScale
             }
 
-            // Theme background. KWin blurs whatever is behind the window, so this
-            // only has to provide the glass surface itself.
+            // The SVG mask excludes its shadow and all four transparent corners.
             KSvg.FrameSvgItem {
                 id: dialogBackground
-                visible: !root.compositorForSession
+                objectName: "glassBackground"
                 anchors.fill: parent
                 imagePath: root.glassPath
             }
 
             MainView {
                 id: main
-                readonly property real contentPadding: fs.innerPadding + (root.compositorForSession ? 0 : root.shadowPadding)
+                readonly property real contentPadding: fs.innerPadding + root.shadowPadding
                 width: parent.width - contentPadding * 2
                 height: parent.height - contentPadding * 2
                 x: contentPadding
@@ -345,6 +332,5 @@ PlasmaCore.Dialog {
         kicker.reset.connect(reset);
         rootModel.refresh();
         probeEffect();
-        Qt.callLater(updateNativeBackground);
     }
 }

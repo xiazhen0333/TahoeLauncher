@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+cmake_minimum_required(VERSION 3.16)
+project(TahoeGlass LANGUAGES CXX)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Quick Qml)
+find_package(KF6WindowSystem REQUIRED)
+add_library(tahoeglassplugin MODULE plugin.cpp)
+target_link_libraries(tahoeglassplugin PRIVATE Qt6::Quick Qt6::Qml KF6::WindowSystem)
+set_target_properties(tahoeglassplugin PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qml")
+configure_file(../contents/ui/native/qmldir qml/qmldir COPYONLY)

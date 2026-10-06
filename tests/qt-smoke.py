@@ -107,6 +107,20 @@ call(physical, 'prepare'); call(physical, 'open'); call(physical, 'advance', 0.0
 physical.setProperty('durationFactor', 0)
 call(physical, 'advance', 0.01)
 assert physical.property('settled') and physical.property('surfaceScale') == 1
+# A cold window must keep its initial state until it can render a frame.
+cold = create(root / 'contents/ui/LauncherMotion.qml')
+cold.setProperty('frameReady', False)
+call(cold, 'prepare'); call(cold, 'open'); QTest.qWait(200)
+assert cold.property('surfaceScale') == 1.14 and cold.property('surfaceOpacity') == 0
+cold.setProperty('frameReady', True)
+cold.findChild(QObject, 'motionFrames').setProperty('running', False)
+call(cold, 'tick', 2)
+assert cold.property('surfaceScale') == 1.14 and cold.property('surfaceOpacity') == 0
+call(cold, 'tick', 2.4)
+assert cold.property('running') and 0 < cold.property('surfaceOpacity') < 0.1
+assert cold.property('surfaceScale') > 1.1, 'a cold frame skipped the opening scale'
+call(cold, 'tick', 2.416)
+assert cold.property('surfaceOpacity') > 0.1, 'opening must continue after the slow frame'
 with tempfile.TemporaryDirectory() as directory:
     tmp = pathlib.Path(directory)
     for name in ('AppsCategorized.qml', 'Scrollbar.qml', 'AppGridView.qml', 'AllAppsList.qml'):
@@ -217,6 +231,12 @@ with tempfile.TemporaryDirectory() as directory:
     for name in ('MenuRepresentation.qml', 'LauncherMotion.qml'):
         shutil.copy(root / 'contents/ui' / name, tmp / name)
     shutil.copytree(root / 'contents/ui/materials', tmp / 'materials')
+    if native_dialog:
+        shutil.copytree(os.environ['TAHOE_GLASS_PLUGIN_DIR'], tmp / 'native')
+    else:
+        (tmp / 'native').mkdir()
+        (tmp / 'native/qmldir').write_text('module TahoeGlass\nGlassEffects 1.0 GlassEffects.qml\n')
+        (tmp / 'native/GlassEffects.qml').write_text('import QtQuick\nItem { property Item maskItem; property bool blurEnabled }\n')
     (tmp / 'MainView.qml').write_text('import QtQuick\nItem { function reset() { counter.resets++ } function reload() { reset() } }\n')
     def module(uri, entries):
         location = tmp / uri.replace('.', '/')
@@ -241,7 +261,8 @@ Item {
     property bool active: false
     property Item contentItem: Item { Rectangle { width: 620; height: 520 } }
     function requestActivate() { active = false; active = true }
-    function update() {}
+    signal frameSwapped()
+    function update() { Qt.callLater(frameSwapped) }
 }
 ''', False),
         'Types': ('''pragma Singleton
@@ -303,19 +324,22 @@ Window {
         assert popup.property('motionPadding') > 0
         call(popup, 'open'); QTest.qWait(550)
         assert popup.property('motionPadding') == 0
-        assert popup.property('nativeGlassFrame').property('width') == popup.width()
+        assert popup.property('glassFrame').property('width') == popup.width()
         call(popup, 'closeWithLaunchAnimation'); QTest.qWait(150)
         call(popupHarness, 'setBackend', 0)
         call(popup, 'probeEffect'); QTest.qWait(30)
         call(popup, 'open')
-        frame = popup.property('nativeGlassFrame')
-        assert frame is not None, 'native DialogBackground FrameSvg was not found'
+        frame = popup.property('glassFrame')
+        assert frame is not None, 'shared glass FrameSvg was not found'
         from PySide6.QtCore import QPoint
+        glassEffects = popup.findChild(QObject, 'glassEffects')
+        assert engine.newQObject(popup).property('backgroundHints').toInt() == 0, 'theme background and theme shadow must stay disabled'
         def check_corners():
             mask = frame.property('mask')
-            assert frame.property('imagePath').endswith('/materials/glass-panel.svg')
-            for x in (5, int(frame.property('width')) - 6):
-                for y in (5, int(frame.property('height')) - 6):
+            assert frame.property('imagePath').endswith('/materials/glass.svg')
+            assert glassEffects.property('blurRegion') == mask, 'blur region must match the rendered SVG mask'
+            for x in (28, int(frame.property('width')) - 29):
+                for y in (28, int(frame.property('height')) - 29):
                     assert not mask.contains(QPoint(x, y)), 'rounded corners must not receive blur'
             assert mask.contains(QPoint(popup.width() // 2, popup.height() // 2))
         for _ in range(35):
@@ -328,6 +352,7 @@ Window {
         assert popup.property('visible') and '|settled|' in popup.property('title')
         call(popup, 'closeWithLaunchAnimation'); QTest.qWait(550)
         assert not popup.property('visible'), 'native close failed to hide the settled window'
+        assert not glassEffects.property('blurEnabled'), 'hidden windows must release blur'
         popupHarness.close()
         # Native KDE reports unsupported platform/shadow capabilities offscreen.
         expected = ('QObject::installEventFilter(): Cannot filter events for objects in a different thread.',
@@ -336,7 +361,7 @@ Window {
                     'This plugin does not support setting window masks')
         unexpected = [text for text in errors if not text.startswith(expected)]
         assert not unexpected, '\n'.join(unexpected)
-        print('PASS: native Plasma Dialog glass mask, transparent corners, mapped reversal and deferred hide')
+        print('PASS: native shared glass/blur mask, no theme shadow, transparent corners, mapped reversal and deferred hide')
         raise SystemExit(0)
     call(popup, 'open')
     panel = popup.findChild(QObject, 'motionPanel')

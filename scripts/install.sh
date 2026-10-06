@@ -16,10 +16,19 @@ backup_package() {
     fi
 }
 if [ "$mode" != --effect-only ]; then
+    # Compile before changing the installed package, so a failed build is harmless.
+    build_dir=$(mktemp -d "${TMPDIR:-/tmp}/tahoe-glass.XXXXXX")
+    trap 'rm -rf "$build_dir"' EXIT HUP INT TERM
+    cmake -S "$source_dir/native" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
+    cmake --build "$build_dir" --parallel 2
     applet="$data_root/plasma/plasmoids/TahoeLauncher"
     backup_package "$applet" launcher
     mkdir -p "$applet"
     cp -a "$source_dir/contents" "$source_dir/metadata.json" "$applet/"
+    # Replace the inode; a running plasmashell may still have the old library mapped.
+    cp "$build_dir/qml/libtahoeglassplugin.so" "$applet/contents/ui/native/libtahoeglassplugin.so.new"
+    mv "$applet/contents/ui/native/libtahoeglassplugin.so.new" "$applet/contents/ui/native/libtahoeglassplugin.so"
+    rm -f "$applet/contents/ui/materials/glass-panel.svg"
     printf '%s\n' "Installed Tahoe Launcher 0.2.0: $applet"
 fi
 if [ "$mode" != --launcher-only ]; then
