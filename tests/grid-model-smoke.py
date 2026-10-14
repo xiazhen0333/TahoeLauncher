@@ -70,13 +70,13 @@ with tempfile.TemporaryDirectory() as directory:
     shutil.copytree(root / 'contents/ui/icons', ui / 'icons')
     shutil.copytree(root / 'contents/code', tmp / 'code')
 
-    def module(uri, entries):
+    def module(uri, entries, version='1.0'):
         location = tmp / uri.replace('.', '/')
         location.mkdir(parents=True)
         names = []
         for name, (content, singleton) in entries.items():
             (location / (name + '.qml')).write_text(content)
-            names.append(('singleton ' if singleton else '') + name + ' 1.0 ' + name + '.qml')
+            names.append(('singleton ' if singleton else '') + name + ' ' + version + ' ' + name + '.qml')
         (location / 'qmldir').write_text('module ' + uri + '\n' + '\n'.join(names) + '\n')
 
     module('org.kde.kirigami', {
@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory() as directory:
         'Icon': ('import QtQuick\nItem { property var source }', False),
         'WheelHandler': ('import QtQuick\nItem { property var target; property bool filterMouseEvents; property real horizontalStepSize; property real verticalStepSize; signal wheel(var wheel) }', False),
     })
-    module('org.kde.plasma.components', {'Label': ('import QtQuick\nText {}', False)})
+    module('org.kde.plasma.components', {'Label': ('import QtQuick\nText {}', False)}, version='3.0')
     (ui / 'ActionMenu.qml').write_text('''import QtQuick
 Item {
     property var launcherWindow
