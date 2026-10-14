@@ -13,7 +13,8 @@ GridView {
 
     focus: true
     clip: true
-    reuseItems: true
+    // Pooled delegates can retain old labels and icons after a layout change.
+    reuseItems: false
     cacheBuffer: height / 2
     currentIndex: count > 0 ? 0 : -1
     interactive: height < contentHeight

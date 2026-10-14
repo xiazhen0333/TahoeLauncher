@@ -20,10 +20,13 @@
 ```sh
 node tests/motion-effect.test.js
 python3 tests/qt-smoke.py
+python3 tests/grid-model-smoke.py
 python3 tests/install-smoke.py
 ```
 
 JavaScript 测试检查窗口匹配、动画反向、模糊生命周期和分类索引。Qt 测试使用离屏渲染，检查实际动画、5 列布局，以及 3000 个应用的分类浏览。KDE 专有控件使用测试替身。安装测试检查备份、路径含空格和编译失败时保留已有版本。
+
+网格测试检查滚动、排序、模型重置和分类切换。测试核对显示名称、图标、鼠标点击、回车启动和右键菜单，防止应用格子与启动目标错位。
 
 ## 原生模糊测试
 

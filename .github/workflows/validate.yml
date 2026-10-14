@@ -21,6 +21,8 @@ jobs:
         run: node tests/motion-effect.test.js
       - name: Verify Qt Quick animation and virtualization
         run: python tests/qt-smoke.py
+      - name: Verify application grid display and launch identity
+        run: python tests/grid-model-smoke.py
       - name: Verify installation
         run: python tests/install-smoke.py
       - name: Parse all QML and validate package metadata
