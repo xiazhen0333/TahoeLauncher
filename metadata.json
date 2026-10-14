@@ -23,7 +23,7 @@
         "Name[nl]": "Tahoe-programmastarter",
         "Name[pl]": "Tahoe Launcher",
         "Version": "0.2.0",
-        "Website": "https://github.com/EliverLara/TahoeLauncher"
+        "Website": "https://github.com/xiazhen0333/TahoeLauncher"
     },
     "X-Plasma-API-Minimum-Version": "6.0",
     "X-Plasma-Provides": [
